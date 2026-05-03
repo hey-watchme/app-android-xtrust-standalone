@@ -9,7 +9,6 @@ import androidx.lifecycle.viewModelScope
 import com.xtrust.standalone.audio.MicrophoneVadMonitor
 import com.xtrust.standalone.audio.WavFileWriter
 import com.xtrust.standalone.data.CardEntity
-import com.xtrust.standalone.data.RecordingSessionSummary
 import com.xtrust.standalone.asr.LocalAsrEngine
 import com.xtrust.standalone.asr.SherpaOnnxAsrEngine
 import com.xtrust.standalone.data.TopicEntity
