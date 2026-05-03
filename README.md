@@ -1,0 +1,307 @@
+# Android Standalone ZeroTouch PoC Handoff
+
+Date: 2026-05-03 JST
+
+This directory is reserved for a new standalone Android PoC that is independent
+from WatchMe / ZeroTouch cloud infrastructure.
+
+## Goal
+
+Build a local-first Android app for strict-security sites where audio,
+transcription, summarization, and local knowledge extraction can run on the
+device without sending data to cloud APIs.
+
+This should be treated as a separate product line from the current WatchMe
+ZeroTouch Android app.
+
+## Decision
+
+Create a clean Android app here:
+
+```text
+/Users/kaya.matsumoto/projects/xtrust/app/android-standalone/
+```
+
+Use the existing WatchMe ZeroTouch Android project as a reference only:
+
+```text
+/Users/kaya.matsumoto/projects/watchme/app/android-zero-touch/
+```
+
+Do not extend the existing ZeroTouch app for this PoC. The current app already
+depends on Supabase Auth, ZeroTouch backend APIs, S3 upload, realtime
+transcription, translation, WebView surfaces, and cloud-backed topic/wiki flows.
+Mixing local-only execution into that app would increase complexity and make it
+harder to prove that the standalone version never communicates externally.
+
+## Product Boundary
+
+The standalone app should be able to prove a stricter security posture than the
+cloud app.
+
+Initial target:
+
+- No Supabase Auth
+- No S3 upload
+- No `https://api.hey-watch.me`
+- No Google login
+- No cloud ASR provider
+- No cloud LLM provider
+- Prefer no `INTERNET` permission in the standalone build
+- Store data locally with Room / SQLite
+- Store audio files locally on-device
+
+The existing ZeroTouch app remains the cloud-connected reference product.
+
+## Existing Project References
+
+Read these files from the current project before implementation:
+
+```text
+/Users/kaya.matsumoto/projects/watchme/app/android-zero-touch/README.md
+/Users/kaya.matsumoto/projects/watchme/app/android-zero-touch/docs/README.md
+/Users/kaya.matsumoto/projects/watchme/app/android-zero-touch/docs/conversation-visualization-pipeline.md
+/Users/kaya.matsumoto/projects/watchme/app/android-zero-touch/docs/live-support.md
+```
+
+Likely useful implementation references:
+
+```text
+/Users/kaya.matsumoto/projects/watchme/app/android-zero-touch/app/src/main/java/com/subbrain/zerotouch/audio/ambient/
+/Users/kaya.matsumoto/projects/watchme/app/android-zero-touch/app/src/main/java/com/subbrain/zerotouch/ui/SettingsScreen.kt
+/Users/kaya.matsumoto/projects/watchme/app/android-zero-touch/app/src/main/java/com/subbrain/zerotouch/ui/HomeDashboardScreen.kt
+/Users/kaya.matsumoto/projects/watchme/app/android-zero-touch/app/src/main/java/com/subbrain/zerotouch/ui/ZeroTouchViewModel.kt
+```
+
+Reference, but do not copy cloud dependencies:
+
+```text
+/Users/kaya.matsumoto/projects/watchme/app/android-zero-touch/app/src/main/java/com/subbrain/zerotouch/api/
+/Users/kaya.matsumoto/projects/watchme/app/android-zero-touch/backend/
+```
+
+## First PoC Scope
+
+Build only one vertical path first:
+
+```text
+Record audio
+  -> local ASR
+  -> save Card locally
+  -> local LLM topic summary
+  -> display on-device timeline/topic UI
+```
+
+Do not start with Wiki, Action Candidate, Connector, account/workspace
+management, Web dashboard, sharing, or cloud sync.
+
+The purpose of the first PoC is to answer:
+
+- Can a target Android tablet run local ASR fast enough?
+- Can a target Android tablet run local Gemma summarization fast enough?
+- Is the output quality acceptable for the Conversation path?
+- Is the battery/thermal behavior acceptable for real site usage?
+- Can the app operate without network permission?
+
+## Local LLM Findings
+
+Local LLM on Android is feasible.
+
+Preferred path:
+
+- Runtime: Google LiteRT-LM
+- Model family: Gemma 4, starting with E2B
+- Test next: Gemma 4 E4B on higher-memory devices
+
+Google released Gemma 4 on 2026-03-31 in E2B, E4B, 31B, and 26B A4B sizes.
+The small E2B/E4B models are intended for ultra-mobile, edge, and browser
+deployment.
+
+Approximate Gemma 4 memory requirements from Google documentation:
+
+| Model | Q4_0 memory estimate |
+| --- | ---: |
+| Gemma 4 E2B | 3.2 GB |
+| Gemma 4 E4B | 5 GB |
+| Gemma 4 31B | 17.4 GB |
+| Gemma 4 26B A4B | 15.6 GB |
+
+Practical implication:
+
+- Start with E2B on Android.
+- Use E4B only on high-memory tablets.
+- Do not target 31B or 26B A4B for normal Android tablets.
+
+Official references:
+
+- Gemma overview: https://ai.google.dev/gemma/docs
+- Gemma 4 overview: https://ai.google.dev/gemma/docs/core
+- Gemma releases: https://ai.google.dev/gemma/docs/releases
+- LiteRT-LM Android guide: https://ai.google.dev/edge/litert-lm/android
+- Gemma terms: https://ai.google.dev/gemma/terms
+
+Important licensing note:
+
+Gemma distributions need to comply with Google's terms. The terms require a
+notice file for distributions other than hosted service distribution. Confirm
+the latest terms before bundling models in an APK or distributing model files.
+
+## Runtime Options Considered
+
+Preferred:
+
+- LiteRT-LM: Google-supported Android Kotlin API, supports Android/JVM, GPU/NPU
+  options, multimodality, and tool use.
+
+Possible fallback:
+
+- llama.cpp: flexible GGUF ecosystem, Android builds are possible, but native
+  integration and performance tuning are more manual.
+- MLC LLM: Android deployment exists, but operationally heavier for this PoC.
+
+Avoid as the primary path:
+
+- MediaPipe LLM Inference API for Android/iOS. Google documentation now marks
+  the mobile implementation deprecated and recommends LiteRT-LM.
+
+References:
+
+- LiteRT-LM GitHub: https://github.com/google-ai-edge/LiteRT-LM
+- llama.cpp Android docs: https://github.com/ggml-org/llama.cpp/blob/master/docs/android.md
+- MLC LLM Android docs: https://llm.mlc.ai/docs/deploy/android
+- MediaPipe LLM Inference: https://ai.google.dev/edge/mediapipe/solutions/genai/llm_inference
+
+## Local ASR Findings
+
+The current WatchMe ZeroTouch app uses cloud ASR providers through backend APIs.
+That must be replaced for standalone.
+
+Candidate options:
+
+- sherpa-onnx: strong candidate for real-time local ASR on Android.
+- whisper.cpp: viable local ASR option with Android sample, but integration and
+  performance tuning need testing.
+- Android `SpeechRecognizer.createOnDeviceSpeechRecognizer`: useful fallback
+  only when device support is available, but it is OS/device/language-pack
+  dependent.
+
+References:
+
+- sherpa-onnx Android docs: https://k2-fsa.github.io/sherpa/onnx/android/index.html
+- whisper.cpp Android sample: https://github.com/ggml-org/whisper.cpp/tree/master/examples/whisper.android
+- Android SpeechRecognizer: https://developer.android.com/reference/android/speech/SpeechRecognizer.html
+
+Working plan for the standalone ASR phase:
+
+- `docs/asr-plan.md`
+
+## Suggested Architecture
+
+Keep the first implementation intentionally small:
+
+```text
+ui/
+  HomeScreen.kt
+  SettingsScreen.kt
+
+audio/
+  Recorder.kt
+  VadSegmenter.kt
+
+asr/
+  LocalAsrEngine.kt
+  SherpaOnnxAsrEngine.kt
+  WhisperCppAsrEngine.kt
+
+llm/
+  LocalLlmEngine.kt
+  LiteRtGemmaEngine.kt
+
+data/
+  AppDatabase.kt
+  CardEntity.kt
+  TopicEntity.kt
+  TranscriptRepository.kt
+
+pipeline/
+  ConversationPipeline.kt
+```
+
+Initial local schema:
+
+```text
+cards
+  id
+  local_recording_id
+  audio_path
+  transcript
+  asr_provider
+  asr_model
+  recorded_at
+  created_at
+
+topics
+  id
+  title
+  summary
+  start_at
+  end_at
+  llm_provider
+  llm_model
+  created_at
+```
+
+## Settings UI Direction
+
+The existing app already has provider chips in the settings sheet. The
+standalone app can use the same concept, but the available choices should be
+local-only.
+
+Initial settings:
+
+- ASR engine: `sherpa-onnx`, `whisper.cpp`, `Android on-device`
+- LLM engine: `Gemma 4 E2B`, `Gemma 4 E4B`
+- Model path: local file picker or managed app model directory
+- VAD engine: threshold first, optional Silero later
+- Data mode: local-only
+
+In a strict standalone build, do not show cloud providers as disabled options.
+The absence of cloud choices is part of the security story.
+
+## What To Avoid Importing
+
+Do not copy these concepts from the existing Android app into the first PoC:
+
+- Supabase authentication
+- Google login
+- Account/workspace organization flows
+- `ZeroTouchApi`
+- S3 upload
+- `/api/transcribe/*`
+- `/api/translate/*`
+- `/api/query-wiki`
+- Web dashboard integration
+- Remote device settings sync
+
+The standalone version should own local settings directly.
+
+## Open Questions
+
+- Target tablet model and RAM size
+- Whether the deployment site allows installing model files separately
+- Whether the model must be bundled in APK/AAB or can be side-loaded
+- Required Japanese ASR quality threshold
+- Expected recording duration per session
+- Whether diarization is required in the first PoC
+- Whether `INTERNET` permission must be absent, or merely unused
+
+## Recommended Next Step
+
+Create a minimal Android project in this directory and verify these in order:
+
+1. App builds and runs with no `INTERNET` permission.
+2. Local recording creates audio files on-device.
+3. Local ASR produces Japanese transcript for a short sample.
+4. LiteRT-LM loads Gemma 4 E2B from local storage.
+5. Local LLM summarizes one transcript into a Topic title and summary.
+6. Room/SQLite persists Card and Topic records.
