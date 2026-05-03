@@ -83,36 +83,43 @@ fun HomeScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
             .fillMaxSize()
             .padding(16.dp)
     ) {
-        ChatStatusCard(
-            uiState = uiState,
-            onResetChat = viewModel::resetChat
-        )
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        VadDebugCard(
-            vadState = uiState.vadDebugState,
-            onToggleListening = {
-                if (uiState.vadDebugState.isListening) {
-                    viewModel.stopVadMonitoring()
-                } else if (hasAudioPermission) {
-                    viewModel.startVadMonitoring()
-                } else {
-                    audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                }
-            },
-            onClearSegments = viewModel::clearSavedSegments
-        )
-
-        Spacer(modifier = Modifier.height(12.dp))
-
         LazyColumn(
             state = listState,
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f),
+            contentPadding = PaddingValues(bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
+            item {
+                ChatStatusCard(
+                    uiState = uiState,
+                    onResetChat = viewModel::resetChat
+                )
+            }
+
+            item {
+                VadDebugCard(
+                    vadState = uiState.vadDebugState,
+                    onToggleListening = {
+                        if (uiState.vadDebugState.isListening) {
+                            viewModel.stopVadMonitoring()
+                        } else if (hasAudioPermission) {
+                            viewModel.startVadMonitoring()
+                        } else {
+                            audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        }
+                    },
+                    onClearSegments = viewModel::clearSavedSegments
+                )
+            }
+
+            if (uiState.vadDebugState.savedSegments.isNotEmpty()) {
+                item {
+                    SavedSegmentsCard(segments = uiState.vadDebugState.savedSegments)
+                }
+            }
+
             if (messages.isEmpty()) {
                 item {
                     EmptyChatState(llmReady = uiState.llmReady)
@@ -276,24 +283,6 @@ private fun VadDebugCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 2.dp)
             )
-            if (vadState.savedSegments.isNotEmpty()) {
-                Text(
-                    text = "Saved wav segments",
-                    style = MaterialTheme.typography.labelMedium,
-                    modifier = Modifier.padding(top = 12.dp, bottom = 6.dp)
-                )
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(140.dp),
-                    contentPadding = PaddingValues(0.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    items(vadState.savedSegments, key = { it.id }) { segment ->
-                        SavedSegmentRow(segment)
-                    }
-                }
-            }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -308,6 +297,32 @@ private fun VadDebugCard(
                 }
                 Button(onClick = onToggleListening) {
                     Text(if (vadState.isListening) "Stop VAD" else "Start VAD")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SavedSegmentsCard(segments: List<AudioSegment>) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "Saved wav segments",
+                style = MaterialTheme.typography.titleMedium
+            )
+            Text(
+                text = "Recent speech segments captured by local VAD",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp, bottom = 10.dp)
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                segments.forEach { segment ->
+                    SavedSegmentRow(segment)
                 }
             }
         }
