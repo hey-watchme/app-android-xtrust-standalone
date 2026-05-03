@@ -82,6 +82,7 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
     private val maxPreRollFrames = 10
 
     init {
+        ensureKnownAsrDirs()
         startMemoryMonitor()
         autoLoadLlmModel()
         autoLoadAsrModel()
@@ -106,7 +107,10 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
     private fun autoLoadAsrModel() {
         val modelDirPath = resolveAsrModelDirPath()
         val modelDir = File(modelDirPath)
-        if (!hasAsrModelFiles(modelDir)) return
+        if (!hasAsrModelFiles(modelDir)) {
+            updateAsrAccessSummary(modelDir)
+            return
+        }
         loadAsrModelInternal(modelDirPath, showMissingErrors = false)
     }
 
@@ -188,17 +192,19 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
 
             when {
                 !modelFile.exists() || !tokensFile.exists() -> {
+                    val accessSummary = buildAsrAccessSummary(modelDir)
                     _uiState.update {
                         it.copy(
                             lastError = if (showMissingErrors) {
-                                "ASR model files not found. Place ${SherpaOnnxAsrEngine.MODEL_FILE_NAME} and ${SherpaOnnxAsrEngine.TOKENS_FILE_NAME} under $modelDirPath"
+                                "ASR model files not found or not readable. Place ${SherpaOnnxAsrEngine.MODEL_FILE_NAME} and ${SherpaOnnxAsrEngine.TOKENS_FILE_NAME} under $modelDirPath and ensure the directory is app-readable."
                             } else {
                                 null
                             },
                             asrDebugState = it.asrDebugState.copy(
                                 isReady = false,
                                 isLoadingModel = false,
-                                modelDirPath = modelDirPath
+                                modelDirPath = modelDirPath,
+                                modelAccessSummary = accessSummary
                             )
                         )
                     }
@@ -211,7 +217,8 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
                                 asrDebugState = it.asrDebugState.copy(
                                     isReady = true,
                                     isLoadingModel = false,
-                                    modelDirPath = modelDirPath
+                                    modelDirPath = modelDirPath,
+                                    modelAccessSummary = buildAsrAccessSummary(modelDir)
                                 )
                             )
                         }
@@ -222,7 +229,8 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
                                 asrDebugState = it.asrDebugState.copy(
                                     isReady = false,
                                     isLoadingModel = false,
-                                    modelDirPath = modelDirPath
+                                    modelDirPath = modelDirPath,
+                                    modelAccessSummary = buildAsrAccessSummary(modelDir)
                                 )
                             )
                         }
@@ -563,7 +571,11 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
             if (showErrors) {
                 _uiState.update {
                     it.copy(
-                        lastError = "ASR model files are missing. Push model.int8.onnx and tokens.txt to $modelDir"
+                        lastError = "ASR model files are missing or unreadable. Push model.int8.onnx and tokens.txt to $modelDir and check directory permissions.",
+                        asrDebugState = it.asrDebugState.copy(
+                            modelDirPath = modelDir,
+                            modelAccessSummary = buildAsrAccessSummary(File(modelDir))
+                        )
                     )
                 }
             }
@@ -577,14 +589,23 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
                     asrDebugState = it.asrDebugState.copy(
                         isReady = true,
                         isLoadingModel = false,
-                        modelDirPath = modelDir
+                        modelDirPath = modelDir,
+                        modelAccessSummary = buildAsrAccessSummary(File(modelDir))
                     )
                 )
             }
             true
         } catch (e: Exception) {
             if (showErrors) {
-                _uiState.update { it.copy(lastError = "ASR load failed: ${e.message}") }
+                _uiState.update {
+                    it.copy(
+                        lastError = "ASR load failed: ${e.message}",
+                        asrDebugState = it.asrDebugState.copy(
+                            modelDirPath = modelDir,
+                            modelAccessSummary = buildAsrAccessSummary(File(modelDir))
+                        )
+                    )
+                }
             }
             false
         }
@@ -645,6 +666,33 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
     private fun hasAsrModelFiles(dir: File): Boolean {
         return File(dir, SherpaOnnxAsrEngine.MODEL_FILE_NAME).exists() &&
             File(dir, SherpaOnnxAsrEngine.TOKENS_FILE_NAME).exists()
+    }
+
+    private fun ensureKnownAsrDirs() {
+        KNOWN_ASR_MODEL_DIR_NAMES.forEach { dirName ->
+            File(asrBaseDir, dirName).mkdirs()
+        }
+    }
+
+    private fun updateAsrAccessSummary(modelDir: File) {
+        _uiState.update {
+            it.copy(
+                asrDebugState = it.asrDebugState.copy(
+                    modelDirPath = modelDir.absolutePath,
+                    modelAccessSummary = buildAsrAccessSummary(modelDir)
+                )
+            )
+        }
+    }
+
+    private fun buildAsrAccessSummary(modelDir: File): String {
+        val modelFile = File(modelDir, SherpaOnnxAsrEngine.MODEL_FILE_NAME)
+        val tokensFile = File(modelDir, SherpaOnnxAsrEngine.TOKENS_FILE_NAME)
+        return buildString {
+            append("dir exists=${modelDir.exists()} read=${modelDir.canRead()} exec=${modelDir.canExecute()}")
+            append(" | model exists=${modelFile.exists()} read=${modelFile.canRead()} size=${modelFile.length()}")
+            append(" | tokens exists=${tokensFile.exists()} read=${tokensFile.canRead()} size=${tokensFile.length()}")
+        }
     }
 
     override fun onCleared() {

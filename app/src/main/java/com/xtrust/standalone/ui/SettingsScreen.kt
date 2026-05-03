@@ -91,6 +91,15 @@ fun SettingsScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
             modifier = Modifier.padding(top = 2.dp, bottom = 12.dp)
         )
 
+        if (uiState.asrDebugState.modelAccessSummary.isNotBlank()) {
+            Text(
+                text = uiState.asrDebugState.modelAccessSummary,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 12.dp)
+            )
+        }
+
         Button(
             onClick = { viewModel.loadAsrModel() },
             enabled = !uiState.asrDebugState.isLoadingModel,
@@ -100,7 +109,7 @@ fun SettingsScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
         }
 
         Text(
-            text = "Place these files in the directory above:\n- model.int8.onnx\n- tokens.txt\n\nThe app auto-detects known SenseVoice folders under `files/asr/` if the files exist there.",
+            text = "Place these files in the directory above:\n- model.int8.onnx\n- tokens.txt\n\nThe app auto-detects known SenseVoice folders under `files/asr/` if the files exist there.\nIf files were pushed from `adb shell` into a shell-owned folder, also run:\n`adb shell chmod 777 /sdcard/Android/data/com.xtrust.standalone/files/asr`\n`adb shell chmod 777 ${uiState.asrDebugState.modelDirPath}`",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 8.dp)

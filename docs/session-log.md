@@ -26,6 +26,7 @@
 | ファイル入力 ASR | `sherpa-onnx-1.12.39.aar` と SenseVoice 前提で保存済み `wav` を `Transcribe` 可能にした |
 | VAD 再調整 | 発話継続側を甘くし、900ms 未満の短片を破棄して分割過多を抑制 |
 | ASR パス自動検出 | `files/asr/` 配下の既知 SenseVoice フォルダを自動検出し、2024/2025 両配置を拾えるように変更 |
+| ASR 権限診断 | Settings に `exists/read/exec` と `chmod 777` 手順を表示し、LLM と同種の shell-owner 問題を切り分け可能にした |
 
 ---
 
@@ -135,6 +136,8 @@ engine.createConversation(ConversationConfig(
   - `sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/`
   - そのほか `model.int8.onnx` と `tokens.txt` を持つ任意の子ディレクトリ
 - 現在は `SenseVoice` を `language = "ja"`、`provider = "cpu"` でロードする
+- Settings に ASR モデルディレクトリの `exists/read/exec`、モデルファイル読取可否、サイズを表示
+- shell 所有ディレクトリに `adb push` した場合に備え、`chmod 777` の回復コマンドも Settings に表示
 
 ---
 

@@ -5,5 +5,6 @@ data class AsrDebugState(
     val modelDirPath: String = "",
     val isLoadingModel: Boolean = false,
     val lastTranscriptionMs: Long = 0,
-    val lastRealTimeFactor: Double = 0.0
+    val lastRealTimeFactor: Double = 0.0,
+    val modelAccessSummary: String = ""
 )
