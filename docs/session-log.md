@@ -21,6 +21,7 @@
 | multi-turn チャット | `Conversation` を保持してローカル会話を継続できるように変更 |
 | メモリ可視化 | Home 画面に Device RAM / App heap / Native heap の使用量表示を追加 |
 | ASR 作業計画 | `docs/asr-plan.md` に `sherpa-onnx` 前提の段階計画を追加 |
+| VAD 足場実装 | `EnergyVadEngine` + `MicrophoneVadMonitor` でローカル発話検知デバッグ UI を追加 |
 
 ---
 
@@ -106,6 +107,14 @@ engine.createConversation(ConversationConfig(
 - `docs/asr-plan.md` に edge-only ASR PoC の段階計画を追加
 - 第一候補は `sherpa-onnx`
 - まずは `Stage 0: 公式 APK による端末ベンチ` と `Stage 1: ファイル入力 ASR` から進める
+
+## 現在の VAD 実装
+
+- `vad/LocalVadEngine.kt` を追加して VAD 実装を差し替え可能な構造にした
+- `vad/EnergyVadEngine.kt` で簡易エネルギーベース VAD を実装
+- `audio/MicrophoneVadMonitor.kt` でマイクから 16kHz mono PCM を読み取り、VAD に渡す形を追加
+- Home 画面に `Start VAD` / `Stop VAD`、`Speech detected`、`dBFS`、検出セグメント数、最後の発話長を表示
+- これは `sherpa-onnx` 導入前の足場であり、本命の VAD 実装とは切り替え前提
 
 ---
 

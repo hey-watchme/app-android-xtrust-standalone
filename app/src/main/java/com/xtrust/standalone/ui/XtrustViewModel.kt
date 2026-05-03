@@ -6,10 +6,12 @@ import android.os.Debug
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.xtrust.standalone.audio.MicrophoneVadMonitor
 import com.xtrust.standalone.data.TopicEntity
 import com.xtrust.standalone.data.TranscriptRepository
 import com.xtrust.standalone.llm.LiteRtGemmaEngine
 import com.xtrust.standalone.llm.LocalLlmEngine
+import com.xtrust.standalone.vad.EnergyVadEngine
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -26,13 +28,16 @@ data class UiState(
     val llmModelPath: String = "",
     val isProcessing: Boolean = false,
     val lastError: String? = null,
-    val memorySnapshot: MemorySnapshot = MemorySnapshot()
+    val memorySnapshot: MemorySnapshot = MemorySnapshot(),
+    val vadDebugState: VadDebugState = VadDebugState()
 )
 
 class XtrustViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository = TranscriptRepository()
     private val llmEngine: LocalLlmEngine = LiteRtGemmaEngine()
+    private val vadEngine = EnergyVadEngine()
+    private val microphoneVadMonitor = MicrophoneVadMonitor(vadEngine)
 
     private val defaultModelPath: String = run {
         val dir = application.getExternalFilesDir(null)
@@ -182,6 +187,66 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
         refreshMemorySnapshot()
     }
 
+    fun startVadMonitoring() {
+        viewModelScope.launch {
+            try {
+                _uiState.update {
+                    it.copy(
+                        lastError = null,
+                        vadDebugState = it.vadDebugState.copy(
+                            isListening = true,
+                            isSpeechDetected = false,
+                            rmsDb = -120.0
+                        )
+                    )
+                }
+                microphoneVadMonitor.start(viewModelScope) { result ->
+                    _uiState.update { current ->
+                        current.copy(
+                            vadDebugState = current.vadDebugState.copy(
+                                isListening = true,
+                                isSpeechDetected = result.isSpeechDetected,
+                                rmsDb = result.rmsDb,
+                                detectedSegments = current.vadDebugState.detectedSegments +
+                                    if (result.speechEnded) 1 else 0,
+                                lastSpeechDurationMs = if (result.speechEnded || result.isSpeechDetected) {
+                                    result.speechDurationMs
+                                } else {
+                                    current.vadDebugState.lastSpeechDurationMs
+                                }
+                            )
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(
+                        lastError = "VAD start failed: ${e.message}",
+                        vadDebugState = it.vadDebugState.copy(isListening = false, isSpeechDetected = false)
+                    )
+                }
+            }
+        }
+    }
+
+    fun stopVadMonitoring() {
+        viewModelScope.launch {
+            microphoneVadMonitor.stop()
+            _uiState.update {
+                it.copy(
+                    vadDebugState = it.vadDebugState.copy(
+                        isListening = false,
+                        isSpeechDetected = false
+                    )
+                )
+            }
+        }
+    }
+
+    fun reportAudioPermissionDenied() {
+        _uiState.update { it.copy(lastError = "マイク権限が必要です。録音許可を有効にしてください。") }
+    }
+
     private fun appendChatMessage(role: ChatRole, text: String) {
         _chatMessages.update { current ->
             current + ChatMessage(
@@ -227,6 +292,9 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
 
     override fun onCleared() {
         super.onCleared()
+        viewModelScope.launch {
+            microphoneVadMonitor.stop()
+        }
         llmEngine.close()
     }
 }

@@ -1,5 +1,7 @@
 package com.xtrust.standalone.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -28,13 +30,19 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import kotlin.math.roundToInt
 
 @Composable
 fun HomeScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
@@ -42,6 +50,22 @@ fun HomeScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
     val messages by viewModel.chatMessages.collectAsState()
     val listState = rememberLazyListState()
     var draft by rememberSaveable { mutableStateOf("") }
+    val context = LocalContext.current
+    val audioPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            viewModel.startVadMonitoring()
+        } else {
+            viewModel.reportAudioPermissionDenied()
+        }
+    }
+    val hasAudioPermission = remember(uiState.vadDebugState.isListening) {
+        ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+    }
 
     LaunchedEffect(messages.size, uiState.isProcessing) {
         val itemCount = messages.size + if (uiState.isProcessing) 1 else 0
@@ -58,6 +82,21 @@ fun HomeScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
         ChatStatusCard(
             uiState = uiState,
             onResetChat = viewModel::resetChat
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        VadDebugCard(
+            vadState = uiState.vadDebugState,
+            onToggleListening = {
+                if (uiState.vadDebugState.isListening) {
+                    viewModel.stopVadMonitoring()
+                } else if (hasAudioPermission) {
+                    viewModel.startVadMonitoring()
+                } else {
+                    audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                }
+            }
         )
 
         Spacer(modifier = Modifier.height(12.dp))
@@ -185,6 +224,57 @@ private fun ChatStatusCard(uiState: UiState, onResetChat: () -> Unit) {
                     enabled = uiState.llmReady && !uiState.isProcessing
                 ) {
                     Text("New chat")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun VadDebugCard(vadState: VadDebugState, onToggleListening: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "Local VAD monitor",
+                style = MaterialTheme.typography.titleMedium
+            )
+            Text(
+                text = if (vadState.isListening) {
+                    if (vadState.isSpeechDetected) "Speech detected" else "Listening for speech"
+                } else {
+                    "Stopped"
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (vadState.isSpeechDetected) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                },
+                modifier = Modifier.padding(top = 8.dp)
+            )
+            Text(
+                text = "Level ${vadState.rmsDb.roundToInt()} dBFS  Threshold ${vadState.thresholdDb.roundToInt()} dBFS",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+            Text(
+                text = "Segments ${vadState.detectedSegments}  Last speech ${vadState.lastSpeechDurationMs} ms",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 2.dp)
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 12.dp),
+                horizontalArrangement = Arrangement.End
+            ) {
+                Button(onClick = onToggleListening) {
+                    Text(if (vadState.isListening) "Stop VAD" else "Start VAD")
                 }
             }
         }
