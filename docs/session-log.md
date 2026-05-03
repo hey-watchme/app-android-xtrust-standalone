@@ -4,7 +4,7 @@
 
 ---
 
-## 現在の状態（2026-05-03 完了）
+## 現在の状態（2026-05-04）
 
 | 項目 | 詳細 |
 |------|------|
@@ -12,7 +12,7 @@
 | Gradle設定 | AGP 9.1.1 / Kotlin 2.2.10 / Compose BOM 2025.05.00 |
 | LiteRT-LM 依存追加 | `com.google.ai.edge.litertlm:litertlm-android:latest.release` |
 | INTERNET権限なし確認 | APKダンプで `INTERNET` パーミッション不在を確認済み |
-| アーキテクチャ骨格 | LLM / データ / UI 実装済み（Room は未接続・インメモリ） |
+| アーキテクチャ骨格 | LLM / データ / UI 実装済み（ローカル DB は `SQLiteOpenHelper` で接続済み） |
 | LiteRT-LM API実装 | `LiteRtGemmaEngine.kt` に Engine/Conversation API 実装済み |
 | Gemma 4 E2B ダウンロード | `~/models/gemma4-e2b/gemma-4-E2B-it.litertlm` (2.4GB) |
 | **モデルロード成功** | **Xiaomi 4GB RAM で 17秒ロード・Engine ready 確認済み** |
@@ -29,6 +29,8 @@
 | ASR 権限診断 | Settings に `exists/read/exec` と `chmod 777` 手順を表示し、LLM と同種の shell-owner 問題を切り分け可能にした |
 | VAD 無音猶予延長 | 分割判定の無音時間を約 2.4 秒まで延ばし、1 秒前後の自然な間では切れにくくした |
 | 自動 ASR | 保存済み `wav` セグメントを自動で順次文字起こしするように変更 |
+| ローカル DB | `SQLiteOpenHelper` ベースで `sessions / cards / topics` をローカル保存する構造に切り替え |
+| セッション単位 | `Start VAD` から `Stop VAD` を 1 セッションとして扱い、Home に履歴を表示 |
 
 ---
 
@@ -50,11 +52,15 @@ android-standalone/
 │       │   ├── LocalLlmEngine.kt     interface
 │       │   └── LiteRtGemmaEngine.kt  LiteRT-LM 実装
 │       └── data/
-│           ├── CardEntity.kt         録音カード（インメモリ）
-│           ├── TopicEntity.kt        LLM要約トピック（インメモリ）
+│           ├── AppDatabaseHelper.kt
+│           ├── RecordingSessionEntity.kt
+│           ├── CardEntity.kt
+│           ├── TopicEntity.kt
 │           └── TranscriptRepository.kt
 └── docs/
-    └── session-log.md
+    ├── current-state.md
+    ├── session-log.md
+    └── asr-plan.md
 ```
 
 ---
@@ -108,6 +114,7 @@ engine.createConversation(ConversationConfig(
 - Home 画面で `Device RAM x / y MB`、`App heap`、`Native heap` を約 1.5 秒ごとに更新表示
 - `New chat` で会話コンテキストをリセット可能
 - モデルファイルが無い、または 1GB 未満で不完全な場合は自動ロードせず待機
+- Home 画面で `Recording sessions` として直近セッション履歴を確認できる
 
 ## ASR の次フェーズ
 
@@ -123,7 +130,7 @@ engine.createConversation(ConversationConfig(
 - Home 画面に `Start VAD` / `Stop VAD`、`Speech detected`、`dBFS`、検出セグメント数、最後の発話長を表示
 - これは `sherpa-onnx` 導入前の足場であり、本命の VAD 実装とは切り替え前提
 - 発話終了時に `audio-segments/segment-*.wav` として保存し、直近 12 件を Home 画面で確認できる
-- `Clear segments` で保存済みセグメント一覧とローカル wav を削除できる
+- `Clear list` で画面上の直近セグメント一覧だけをリセットできる（DB と wav は保持）
 - 継続判定の閾値を開始判定より低くするヒステリシスを追加し、短い無音で分割されにくくした
 - 900ms 未満の短い断片は保存しないようにして、1語ごとの細切れ wav を減らした
 - 無音が約 2.4 秒続いたときだけ分割するように変更し、通常会話の短い間では継続扱いにした
@@ -142,6 +149,21 @@ engine.createConversation(ConversationConfig(
 - Settings に ASR モデルディレクトリの `exists/read/exec`、モデルファイル読取可否、サイズを表示
 - shell 所有ディレクトリに `adb push` した場合に備え、`chmod 777` の回復コマンドも Settings に表示
 - 保存されたセグメントは手動ボタンを待たず、そのまま自動で ASR に投入する
+
+## 現在の DB 実装
+
+- `Room` ではなく `SQLiteOpenHelper` を使ってローカル DB を実装
+- テーブルは `sessions` / `cards` / `topics`
+- `Start VAD` 時に `recording` セッションを作成
+- `Stop VAD` 時にそのセッションを `completed` に更新
+- セグメント保存時に `cards` へ保存し、ASR 完了後に transcript / RTF / 推論時間を更新
+- アプリ再起動時には `recording` のまま残ったセッションを `interrupted` としてクローズ
+
+## 次のマイルストーン
+
+- セッション単位でセグメント群をまとめてローカル要約する
+- `topics` をセッションに紐づけて Home に表示する
+- 1回の録音終了後に、要約まで自動で完走する縦串を作る
 
 ---
 

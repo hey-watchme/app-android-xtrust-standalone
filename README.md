@@ -5,6 +5,14 @@ Date: 2026-05-03 JST
 This directory is reserved for a new standalone Android PoC that is independent
 from WatchMe / ZeroTouch cloud infrastructure.
 
+## Current status
+
+Current implementation status and restart notes are tracked in:
+
+- `docs/current-state.md`
+- `docs/session-log.md`
+- `docs/asr-plan.md`
+
 ## Goal
 
 Build a local-first Android app for strict-security sites where audio,

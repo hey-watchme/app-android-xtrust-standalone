@@ -47,11 +47,13 @@ import kotlin.math.roundToInt
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import com.xtrust.standalone.data.RecordingSessionSummary
 
 @Composable
 fun HomeScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
     val uiState by viewModel.uiState.collectAsState()
     val messages by viewModel.chatMessages.collectAsState()
+    val sessions by viewModel.sessions.collectAsState()
     val listState = rememberLazyListState()
     var draft by rememberSaveable { mutableStateOf("") }
     val context = LocalContext.current
@@ -116,6 +118,15 @@ fun HomeScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
 
             item {
                 AsrStatusCard(asrState = uiState.asrDebugState)
+            }
+
+            if (sessions.isNotEmpty()) {
+                item {
+                    SessionHistoryCard(
+                        sessions = sessions,
+                        isRecording = uiState.vadDebugState.isListening
+                    )
+                }
             }
 
             if (uiState.vadDebugState.savedSegments.isNotEmpty()) {
@@ -301,7 +312,7 @@ private fun VadDebugCard(
                     onClick = onClearSegments,
                     enabled = vadState.savedSegments.isNotEmpty() && !vadState.isListening
                 ) {
-                    Text("Clear segments")
+                    Text("Clear list")
                 }
                 Button(onClick = onToggleListening) {
                     Text(if (vadState.isListening) "Stop VAD" else "Start VAD")
@@ -343,6 +354,52 @@ private fun AsrStatusCard(asrState: AsrDebugState) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 6.dp)
             )
+        }
+    }
+}
+
+@Composable
+private fun SessionHistoryCard(
+    sessions: List<RecordingSessionSummary>,
+    isRecording: Boolean
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "Recording sessions",
+                style = MaterialTheme.typography.titleMedium
+            )
+            Text(
+                text = if (isRecording) {
+                    "The current VAD run is being stored as one session"
+                } else {
+                    "Each Start / Stop VAD cycle is one local session"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp, bottom = 10.dp)
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                sessions.take(5).forEach { summary ->
+                    val started = remember(summary.session.startedAt) {
+                        SimpleDateFormat("MM/dd HH:mm:ss", Locale.getDefault())
+                            .format(Date(summary.session.startedAt))
+                    }
+                    val ended = summary.session.endedAt?.let {
+                        remember(it) {
+                            SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(it))
+                        }
+                    } ?: "active"
+                    Text(
+                        text = "#${summary.session.id}  $started → $ended  ${summary.segmentCount} segments  ${summary.transcribedCount} transcribed  ${summary.session.status}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
         }
     }
 }

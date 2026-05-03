@@ -8,6 +8,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.xtrust.standalone.audio.MicrophoneVadMonitor
 import com.xtrust.standalone.audio.WavFileWriter
+import com.xtrust.standalone.data.CardEntity
+import com.xtrust.standalone.data.RecordingSessionSummary
 import com.xtrust.standalone.asr.LocalAsrEngine
 import com.xtrust.standalone.asr.SherpaOnnxAsrEngine
 import com.xtrust.standalone.data.TopicEntity
@@ -46,7 +48,7 @@ data class UiState(
 
 class XtrustViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val repository = TranscriptRepository()
+    private val repository = TranscriptRepository(application.applicationContext)
     private val llmEngine: LocalLlmEngine = LiteRtGemmaEngine()
     private val asrEngine: LocalAsrEngine = SherpaOnnxAsrEngine()
     private val vadEngine = EnergyVadEngine()
@@ -76,16 +78,21 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
 
     val cards = repository.cards.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val topics = repository.topics.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val sessions = repository.sessions.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     private var nextChatMessageId = 1L
-    private var nextSegmentId = 1L
     private val captureLock = Any()
     private val asrTranscriptionMutex = Mutex()
     private val preRollFrames = ArrayDeque<ShortArray>()
     private val activeSpeechFrames = mutableListOf<ShortArray>()
     private val maxPreRollFrames = 10
+    private var activeSessionId: Long? = null
 
     init {
         ensureKnownAsrDirs()
+        viewModelScope.launch {
+            repository.closeDanglingSessions(System.currentTimeMillis())
+            repository.refresh()
+        }
         startMemoryMonitor()
         autoLoadLlmModel()
         autoLoadAsrModel()
@@ -258,6 +265,7 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
                 """.trimIndent()
                 val result = llmEngine.generate(prompt)
                 val topic = TopicEntity(
+                    sessionId = currentOrLatestSessionId(),
                     title = result.lines().firstOrNull() ?: "Topic",
                     summary = result,
                     startAt = System.currentTimeMillis(),
@@ -306,6 +314,8 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
     fun startVadMonitoring() {
         viewModelScope.launch {
             try {
+                val sessionId = repository.startSession(System.currentTimeMillis())
+                activeSessionId = sessionId
                 _uiState.update {
                     it.copy(
                         lastError = null,
@@ -334,6 +344,8 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             microphoneVadMonitor.stop()
             flushActiveSpeechSegment()
+            activeSessionId?.let { repository.completeSession(it, System.currentTimeMillis()) }
+            activeSessionId = null
             _uiState.update {
                 it.copy(
                     vadDebugState = it.vadDebugState.copy(
@@ -350,7 +362,6 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun clearSavedSegments() {
-        segmentOutputDir.listFiles()?.forEach { it.delete() }
         synchronized(captureLock) {
             preRollFrames.clear()
             activeSpeechFrames.clear()
@@ -464,7 +475,11 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         if (segmentToSave != null && shouldPersistSegment) {
-            saveSegment(segmentToSave!!, segmentDurationMs)
+            saveSegment(
+                samples = segmentToSave!!,
+                durationMs = segmentDurationMs,
+                sessionId = activeSessionId
+            )
         }
     }
 
@@ -490,20 +505,40 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
                         )
                     )
                 }
-                saveSegment(segmentToSave, durationMs)
+                saveSegment(
+                    samples = segmentToSave,
+                    durationMs = durationMs,
+                    sessionId = activeSessionId
+                )
             }
         }
     }
 
-    private fun saveSegment(samples: ShortArray, durationMs: Long) {
+    private fun saveSegment(samples: ShortArray, durationMs: Long, sessionId: Long?) {
         if (samples.isEmpty()) return
+        if (sessionId == null) {
+            _uiState.update { it.copy(lastError = "録音セッションが未開始のため、セグメントを保存できませんでした。") }
+            return
+        }
         viewModelScope.launch(Dispatchers.IO) {
             val fileName = buildSegmentFileName()
             val outputFile = File(segmentOutputDir, fileName)
             try {
                 WavFileWriter.writeMono16BitPcm(outputFile, samples, SAMPLE_RATE)
+                val cardId = repository.saveCard(
+                    CardEntity(
+                        sessionId = sessionId,
+                        audioPath = outputFile.absolutePath,
+                        transcript = null,
+                        asrProvider = "sherpa-onnx",
+                        asrModel = "sensevoice-int8-ja",
+                        durationMs = durationMs,
+                        sizeBytes = outputFile.length(),
+                        recordedAt = System.currentTimeMillis()
+                    )
+                )
                 val segment = AudioSegment(
-                    id = nextSegmentId++,
+                    id = cardId,
                     fileName = fileName,
                     filePath = outputFile.absolutePath,
                     durationMs = durationMs,
@@ -551,6 +586,12 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
                     0.0
                 }
 
+                repository.updateCardTranscription(
+                    cardId = segmentId,
+                    transcript = transcript.text.ifBlank { "[no text]" },
+                    transcriptionMs = elapsedMs,
+                    realTimeFactor = rtf
+                )
                 updateSegment(segmentId) {
                     it.copy(
                         transcript = transcript.text.ifBlank { "[no text]" },
@@ -663,6 +704,10 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun calculateDurationMs(sampleCount: Int): Long {
         return sampleCount * 1000L / SAMPLE_RATE
+    }
+
+    private fun currentOrLatestSessionId(): Long? {
+        return activeSessionId ?: sessions.value.firstOrNull()?.session?.id
     }
 
     private fun resolveAsrModelDirPath(preferredPath: String? = null): String {
