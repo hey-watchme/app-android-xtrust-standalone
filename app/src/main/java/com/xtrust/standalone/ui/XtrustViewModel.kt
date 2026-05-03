@@ -8,6 +8,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.xtrust.standalone.audio.MicrophoneVadMonitor
 import com.xtrust.standalone.audio.WavFileWriter
+import com.xtrust.standalone.asr.LocalAsrEngine
+import com.xtrust.standalone.asr.SherpaOnnxAsrEngine
 import com.xtrust.standalone.data.TopicEntity
 import com.xtrust.standalone.data.TranscriptRepository
 import com.xtrust.standalone.llm.LiteRtGemmaEngine
@@ -36,13 +38,15 @@ data class UiState(
     val isProcessing: Boolean = false,
     val lastError: String? = null,
     val memorySnapshot: MemorySnapshot = MemorySnapshot(),
-    val vadDebugState: VadDebugState = VadDebugState()
+    val vadDebugState: VadDebugState = VadDebugState(),
+    val asrDebugState: AsrDebugState = AsrDebugState()
 )
 
 class XtrustViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository = TranscriptRepository()
     private val llmEngine: LocalLlmEngine = LiteRtGemmaEngine()
+    private val asrEngine: LocalAsrEngine = SherpaOnnxAsrEngine()
     private val vadEngine = EnergyVadEngine()
     private val microphoneVadMonitor = MicrophoneVadMonitor(vadEngine)
 
@@ -56,8 +60,17 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
         val dir = application.getExternalFilesDir(null) ?: application.filesDir
         File(dir, "audio-segments").apply { mkdirs() }
     }
+    private val defaultAsrModelDirPath: String = run {
+        val dir = application.getExternalFilesDir(null) ?: application.filesDir
+        File(dir, "asr/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09").apply { mkdirs() }.absolutePath
+    }
 
-    private val _uiState = MutableStateFlow(UiState(llmModelPath = defaultModelPath))
+    private val _uiState = MutableStateFlow(
+        UiState(
+            llmModelPath = defaultModelPath,
+            asrDebugState = AsrDebugState(modelDirPath = defaultAsrModelDirPath)
+        )
+    )
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
     private val _chatMessages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val chatMessages: StateFlow<List<ChatMessage>> = _chatMessages.asStateFlow()
@@ -74,10 +87,15 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
     init {
         startMemoryMonitor()
         autoLoadLlmModel()
+        autoLoadAsrModel()
     }
 
     fun loadLlmModel(modelPath: String = defaultModelPath) {
         loadLlmModelInternal(modelPath, showMissingErrors = true)
+    }
+
+    fun loadAsrModel(modelDirPath: String = defaultAsrModelDirPath) {
+        loadAsrModelInternal(modelDirPath, showMissingErrors = true)
     }
 
     private fun autoLoadLlmModel() {
@@ -86,6 +104,14 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
             return
         }
         loadLlmModelInternal(defaultModelPath, showMissingErrors = false)
+    }
+
+    private fun autoLoadAsrModel() {
+        val modelDir = File(defaultAsrModelDirPath)
+        val modelFile = File(modelDir, SherpaOnnxAsrEngine.MODEL_FILE_NAME)
+        val tokensFile = File(modelDir, SherpaOnnxAsrEngine.TOKENS_FILE_NAME)
+        if (!modelFile.exists() || !tokensFile.exists()) return
+        loadAsrModelInternal(defaultAsrModelDirPath, showMissingErrors = false)
     }
 
     private fun loadLlmModelInternal(modelPath: String, showMissingErrors: Boolean) {
@@ -137,6 +163,73 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
                             isProcessing = false,
                             lastError = "ロード失敗: ${e.message}"
                         )
+                    }
+                }
+            }
+        }
+    }
+
+    private fun loadAsrModelInternal(modelDirPath: String, showMissingErrors: Boolean) {
+        if (_uiState.value.asrDebugState.isLoadingModel) return
+        if (_uiState.value.asrDebugState.isReady &&
+            _uiState.value.asrDebugState.modelDirPath == modelDirPath
+        ) return
+
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    lastError = null,
+                    asrDebugState = it.asrDebugState.copy(
+                        modelDirPath = modelDirPath,
+                        isLoadingModel = true
+                    )
+                )
+            }
+
+            val modelDir = File(modelDirPath)
+            val modelFile = File(modelDir, SherpaOnnxAsrEngine.MODEL_FILE_NAME)
+            val tokensFile = File(modelDir, SherpaOnnxAsrEngine.TOKENS_FILE_NAME)
+
+            when {
+                !modelFile.exists() || !tokensFile.exists() -> {
+                    _uiState.update {
+                        it.copy(
+                            lastError = if (showMissingErrors) {
+                                "ASR model files not found. Place ${SherpaOnnxAsrEngine.MODEL_FILE_NAME} and ${SherpaOnnxAsrEngine.TOKENS_FILE_NAME} under $modelDirPath"
+                            } else {
+                                null
+                            },
+                            asrDebugState = it.asrDebugState.copy(
+                                isReady = false,
+                                isLoadingModel = false,
+                                modelDirPath = modelDirPath
+                            )
+                        )
+                    }
+                }
+                else -> {
+                    try {
+                        asrEngine.initialize(modelDirPath)
+                        _uiState.update {
+                            it.copy(
+                                asrDebugState = it.asrDebugState.copy(
+                                    isReady = true,
+                                    isLoadingModel = false,
+                                    modelDirPath = modelDirPath
+                                )
+                            )
+                        }
+                    } catch (e: Exception) {
+                        _uiState.update {
+                            it.copy(
+                                lastError = "ASR load failed: ${e.message}",
+                                asrDebugState = it.asrDebugState.copy(
+                                    isReady = false,
+                                    isLoadingModel = false,
+                                    modelDirPath = modelDirPath
+                                )
+                            )
+                        }
                     }
                 }
             }
@@ -263,6 +356,57 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
                     savedSegments = emptyList()
                 )
             )
+        }
+    }
+
+    fun transcribeSegment(segmentId: Long) {
+        val segment = _uiState.value.vadDebugState.savedSegments.firstOrNull { it.id == segmentId } ?: return
+        updateSegment(segmentId) { it.copy(isTranscribing = true, asrError = null) }
+
+        viewModelScope.launch {
+            if (!ensureAsrReady(showErrors = true)) {
+                updateSegment(segmentId) { it.copy(isTranscribing = false, asrError = "ASR model is not loaded") }
+                return@launch
+            }
+
+            val startedAt = System.currentTimeMillis()
+            try {
+                val transcript = asrEngine.transcribe(segment.filePath)
+                val elapsedMs = System.currentTimeMillis() - startedAt
+                val audioDurationMs = transcript.sampleCount * 1000L / transcript.sampleRate
+                val rtf = if (audioDurationMs > 0) {
+                    elapsedMs.toDouble() / audioDurationMs.toDouble()
+                } else {
+                    0.0
+                }
+
+                updateSegment(segmentId) {
+                    it.copy(
+                        transcript = transcript.text.ifBlank { "[no text]" },
+                        isTranscribing = false,
+                        asrError = null,
+                        transcriptionMs = elapsedMs,
+                        realTimeFactor = rtf
+                    )
+                }
+                _uiState.update {
+                    it.copy(
+                        asrDebugState = it.asrDebugState.copy(
+                            lastTranscriptionMs = elapsedMs,
+                            lastRealTimeFactor = rtf
+                        )
+                    )
+                }
+                refreshMemorySnapshot()
+            } catch (e: Exception) {
+                updateSegment(segmentId) {
+                    it.copy(
+                        isTranscribing = false,
+                        asrError = e.message ?: "Unknown ASR error"
+                    )
+                }
+                _uiState.update { it.copy(lastError = "ASR transcription failed: ${e.message}") }
+            }
         }
     }
 
@@ -400,6 +544,55 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    private suspend fun ensureAsrReady(showErrors: Boolean): Boolean {
+        if (asrEngine.isReady) return true
+
+        val modelDir = _uiState.value.asrDebugState.modelDirPath.ifBlank { defaultAsrModelDirPath }
+        val modelFile = File(modelDir, SherpaOnnxAsrEngine.MODEL_FILE_NAME)
+        val tokensFile = File(modelDir, SherpaOnnxAsrEngine.TOKENS_FILE_NAME)
+        if (!modelFile.exists() || !tokensFile.exists()) {
+            if (showErrors) {
+                _uiState.update {
+                    it.copy(
+                        lastError = "ASR model files are missing. Push model.int8.onnx and tokens.txt to $modelDir"
+                    )
+                }
+            }
+            return false
+        }
+
+        return try {
+            asrEngine.initialize(modelDir)
+            _uiState.update {
+                it.copy(
+                    asrDebugState = it.asrDebugState.copy(
+                        isReady = true,
+                        isLoadingModel = false,
+                        modelDirPath = modelDir
+                    )
+                )
+            }
+            true
+        } catch (e: Exception) {
+            if (showErrors) {
+                _uiState.update { it.copy(lastError = "ASR load failed: ${e.message}") }
+            }
+            false
+        }
+    }
+
+    private fun updateSegment(segmentId: Long, transform: (AudioSegment) -> AudioSegment) {
+        _uiState.update { current ->
+            current.copy(
+                vadDebugState = current.vadDebugState.copy(
+                    savedSegments = current.vadDebugState.savedSegments.map { segment ->
+                        if (segment.id == segmentId) transform(segment) else segment
+                    }
+                )
+            )
+        }
+    }
+
     private fun buildSegmentFileName(): String {
         val timestamp = SimpleDateFormat("yyyyMMdd-HHmmss-SSS", Locale.US).format(Date())
         return "segment-$timestamp.wav"
@@ -425,6 +618,7 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             microphoneVadMonitor.stop()
         }
+        asrEngine.close()
         llmEngine.close()
     }
 

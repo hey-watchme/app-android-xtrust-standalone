@@ -58,6 +58,7 @@ dependencies {
 
     // LiteRT-LM: on-device LLM runtime for Gemma 4
     implementation("com.google.ai.edge.litertlm:litertlm-android:latest.release")
+    implementation(files("libs/sherpa-onnx-1.12.39.aar"))
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

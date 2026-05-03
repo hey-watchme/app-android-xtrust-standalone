@@ -114,9 +114,17 @@ fun HomeScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
                 )
             }
 
+            item {
+                AsrStatusCard(asrState = uiState.asrDebugState)
+            }
+
             if (uiState.vadDebugState.savedSegments.isNotEmpty()) {
                 item {
-                    SavedSegmentsCard(segments = uiState.vadDebugState.savedSegments)
+                    SavedSegmentsCard(
+                        segments = uiState.vadDebugState.savedSegments,
+                        asrReady = uiState.asrDebugState.isReady,
+                        onTranscribe = viewModel::transcribeSegment
+                    )
                 }
             }
 
@@ -304,7 +312,41 @@ private fun VadDebugCard(
 }
 
 @Composable
-private fun SavedSegmentsCard(segments: List<AudioSegment>) {
+private fun AsrStatusCard(asrState: AsrDebugState) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = if (asrState.isReady) "Sherpa-ONNX ASR ready" else "Sherpa-ONNX ASR not loaded",
+                style = MaterialTheme.typography.titleMedium,
+                color = if (asrState.isReady) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+            )
+            Text(
+                text = asrState.modelDirPath,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 8.dp)
+            )
+            if (asrState.lastTranscriptionMs > 0) {
+                Text(
+                    text = "Last transcription ${asrState.lastTranscriptionMs} ms  RTF ${"%.2f".format(asrState.lastRealTimeFactor)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SavedSegmentsCard(
+    segments: List<AudioSegment>,
+    asrReady: Boolean,
+    onTranscribe: (Long) -> Unit
+) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
@@ -322,7 +364,11 @@ private fun SavedSegmentsCard(segments: List<AudioSegment>) {
             )
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 segments.forEach { segment ->
-                    SavedSegmentRow(segment)
+                    SavedSegmentRow(
+                        segment = segment,
+                        asrReady = asrReady,
+                        onTranscribe = onTranscribe
+                    )
                 }
             }
         }
@@ -330,24 +376,71 @@ private fun SavedSegmentsCard(segments: List<AudioSegment>) {
 }
 
 @Composable
-private fun SavedSegmentRow(segment: AudioSegment) {
+private fun SavedSegmentRow(
+    segment: AudioSegment,
+    asrReady: Boolean,
+    onTranscribe: (Long) -> Unit
+) {
     val timeText = remember(segment.createdAt) {
         SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(segment.createdAt))
     }
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween
+    Column(
+        modifier = Modifier.fillMaxWidth()
     ) {
-        Column(modifier = Modifier.weight(1f)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = segment.fileName,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1
+                )
+                Text(
+                    text = "$timeText  ${segment.durationMs} ms  ${segment.sizeBytes / 1024} KB",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Button(
+                onClick = { onTranscribe(segment.id) },
+                enabled = !segment.isTranscribing,
+                modifier = Modifier.padding(start = 8.dp)
+            ) {
+                Text(
+                    if (segment.isTranscribing) {
+                        "Running…"
+                    } else if (asrReady) {
+                        "Transcribe"
+                    } else {
+                        "Load + run"
+                    }
+                )
+            }
+        }
+        segment.transcript?.let { transcript ->
             Text(
-                text = segment.fileName,
+                text = transcript,
                 style = MaterialTheme.typography.bodySmall,
-                maxLines = 1
+                modifier = Modifier.padding(top = 6.dp),
             )
+        }
+        segment.transcriptionMs?.let { duration ->
             Text(
-                text = "$timeText  ${segment.durationMs} ms  ${segment.sizeBytes / 1024} KB",
+                text = "ASR ${duration} ms  RTF ${segment.realTimeFactor?.let { "%.2f".format(it) } ?: "-"}",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+        }
+        segment.asrError?.let { error ->
+            Text(
+                text = error,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(top = 4.dp)
             )
         }
     }
