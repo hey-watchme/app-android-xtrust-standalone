@@ -7,11 +7,14 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.xtrust.standalone.audio.MicrophoneVadMonitor
+import com.xtrust.standalone.audio.WavFileWriter
 import com.xtrust.standalone.data.TopicEntity
 import com.xtrust.standalone.data.TranscriptRepository
 import com.xtrust.standalone.llm.LiteRtGemmaEngine
 import com.xtrust.standalone.llm.LocalLlmEngine
 import com.xtrust.standalone.vad.EnergyVadEngine
+import com.xtrust.standalone.vad.VadFrameResult
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -22,6 +25,10 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.ArrayDeque
+import java.util.Date
+import java.util.Locale
 
 data class UiState(
     val llmReady: Boolean = false,
@@ -45,6 +52,10 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
         File(dir, "models").mkdirs()  // app が owner になるので chmod 不要
         File(dir, "models/gemma-4-E2B-it.litertlm").absolutePath
     }
+    private val segmentOutputDir: File = run {
+        val dir = application.getExternalFilesDir(null) ?: application.filesDir
+        File(dir, "audio-segments").apply { mkdirs() }
+    }
 
     private val _uiState = MutableStateFlow(UiState(llmModelPath = defaultModelPath))
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
@@ -54,6 +65,11 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
     val cards = repository.cards.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val topics = repository.topics.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     private var nextChatMessageId = 1L
+    private var nextSegmentId = 1L
+    private val captureLock = Any()
+    private val preRollFrames = ArrayDeque<ShortArray>()
+    private val activeSpeechFrames = mutableListOf<ShortArray>()
+    private val maxPreRollFrames = 10
 
     init {
         startMemoryMonitor()
@@ -200,23 +216,8 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
                         )
                     )
                 }
-                microphoneVadMonitor.start(viewModelScope) { result ->
-                    _uiState.update { current ->
-                        current.copy(
-                            vadDebugState = current.vadDebugState.copy(
-                                isListening = true,
-                                isSpeechDetected = result.isSpeechDetected,
-                                rmsDb = result.rmsDb,
-                                detectedSegments = current.vadDebugState.detectedSegments +
-                                    if (result.speechEnded) 1 else 0,
-                                lastSpeechDurationMs = if (result.speechEnded || result.isSpeechDetected) {
-                                    result.speechDurationMs
-                                } else {
-                                    current.vadDebugState.lastSpeechDurationMs
-                                }
-                            )
-                        )
-                    }
+                microphoneVadMonitor.start(viewModelScope) { frame, result ->
+                    processVadFrame(frame, result)
                 }
             } catch (e: Exception) {
                 _uiState.update {
@@ -232,6 +233,7 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
     fun stopVadMonitoring() {
         viewModelScope.launch {
             microphoneVadMonitor.stop()
+            flushActiveSpeechSegment()
             _uiState.update {
                 it.copy(
                     vadDebugState = it.vadDebugState.copy(
@@ -245,6 +247,23 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
 
     fun reportAudioPermissionDenied() {
         _uiState.update { it.copy(lastError = "マイク権限が必要です。録音許可を有効にしてください。") }
+    }
+
+    fun clearSavedSegments() {
+        segmentOutputDir.listFiles()?.forEach { it.delete() }
+        synchronized(captureLock) {
+            preRollFrames.clear()
+            activeSpeechFrames.clear()
+        }
+        _uiState.update {
+            it.copy(
+                vadDebugState = it.vadDebugState.copy(
+                    detectedSegments = 0,
+                    lastSpeechDurationMs = 0,
+                    savedSegments = emptyList()
+                )
+            )
+        }
     }
 
     private fun appendChatMessage(role: ChatRole, text: String) {
@@ -290,11 +309,126 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun bytesToMb(bytes: Long): Long = bytes / (1024 * 1024)
 
+    private fun processVadFrame(frame: ShortArray, result: VadFrameResult) {
+        var segmentToSave: ShortArray? = null
+        var segmentDurationMs = 0L
+
+        synchronized(captureLock) {
+            preRollFrames.addLast(frame.copyOf())
+            while (preRollFrames.size > maxPreRollFrames) {
+                preRollFrames.removeFirst()
+            }
+
+            if (result.speechStarted && activeSpeechFrames.isEmpty()) {
+                activeSpeechFrames.addAll(preRollFrames.map { it.copyOf() })
+            }
+
+            if (result.speechStarted || result.isSpeechDetected || activeSpeechFrames.isNotEmpty()) {
+                activeSpeechFrames.add(frame.copyOf())
+            }
+
+            if (result.speechEnded && activeSpeechFrames.isNotEmpty()) {
+                segmentToSave = flattenFrames(activeSpeechFrames)
+                segmentDurationMs = calculateDurationMs(segmentToSave!!.size)
+                activeSpeechFrames.clear()
+                preRollFrames.clear()
+            }
+        }
+
+        _uiState.update { current ->
+            current.copy(
+                vadDebugState = current.vadDebugState.copy(
+                    isListening = true,
+                    isSpeechDetected = result.isSpeechDetected,
+                    rmsDb = result.rmsDb,
+                    detectedSegments = current.vadDebugState.detectedSegments +
+                        if (result.speechEnded) 1 else 0,
+                    lastSpeechDurationMs = if (result.speechEnded || result.isSpeechDetected) {
+                        result.speechDurationMs
+                    } else {
+                        current.vadDebugState.lastSpeechDurationMs
+                    }
+                )
+            )
+        }
+
+        if (segmentToSave != null) {
+            saveSegment(segmentToSave!!, segmentDurationMs)
+        }
+    }
+
+    private fun flushActiveSpeechSegment() {
+        val segmentToSave: ShortArray?
+        synchronized(captureLock) {
+            segmentToSave = if (activeSpeechFrames.isNotEmpty()) {
+                flattenFrames(activeSpeechFrames)
+            } else {
+                null
+            }
+            activeSpeechFrames.clear()
+            preRollFrames.clear()
+        }
+        if (segmentToSave != null && segmentToSave.isNotEmpty()) {
+            saveSegment(segmentToSave, calculateDurationMs(segmentToSave.size))
+        }
+    }
+
+    private fun saveSegment(samples: ShortArray, durationMs: Long) {
+        if (samples.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val fileName = buildSegmentFileName()
+            val outputFile = File(segmentOutputDir, fileName)
+            try {
+                WavFileWriter.writeMono16BitPcm(outputFile, samples, SAMPLE_RATE)
+                val segment = AudioSegment(
+                    id = nextSegmentId++,
+                    fileName = fileName,
+                    filePath = outputFile.absolutePath,
+                    durationMs = durationMs,
+                    sizeBytes = outputFile.length()
+                )
+                _uiState.update { current ->
+                    current.copy(
+                        vadDebugState = current.vadDebugState.copy(
+                            savedSegments = (listOf(segment) + current.vadDebugState.savedSegments).take(12)
+                        )
+                    )
+                }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(lastError = "セグメント保存失敗: ${e.message}") }
+            }
+        }
+    }
+
+    private fun buildSegmentFileName(): String {
+        val timestamp = SimpleDateFormat("yyyyMMdd-HHmmss-SSS", Locale.US).format(Date())
+        return "segment-$timestamp.wav"
+    }
+
+    private fun flattenFrames(frames: List<ShortArray>): ShortArray {
+        val totalSize = frames.sumOf { it.size }
+        val flattened = ShortArray(totalSize)
+        var offset = 0
+        for (frame in frames) {
+            frame.copyInto(flattened, destinationOffset = offset)
+            offset += frame.size
+        }
+        return flattened
+    }
+
+    private fun calculateDurationMs(sampleCount: Int): Long {
+        return sampleCount * 1000L / SAMPLE_RATE
+    }
+
     override fun onCleared() {
         super.onCleared()
         viewModelScope.launch {
             microphoneVadMonitor.stop()
         }
         llmEngine.close()
+    }
+
+    private companion object {
+        const val SAMPLE_RATE = 16_000
     }
 }

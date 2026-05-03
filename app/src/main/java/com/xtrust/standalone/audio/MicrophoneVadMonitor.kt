@@ -26,7 +26,7 @@ class MicrophoneVadMonitor(
 
     suspend fun start(
         scope: CoroutineScope,
-        onFrame: (VadFrameResult) -> Unit
+        onFrame: (ShortArray, VadFrameResult) -> Unit
     ) {
         if (monitorJob?.isActive == true) return
 
@@ -63,7 +63,7 @@ class MicrophoneVadMonitor(
                     frameBuffer.copyOf(readCount)
                 }
                 val result = vadEngine.processFrame(frame)
-                onFrame(result)
+                onFrame(frame, result)
             }
         }
     }

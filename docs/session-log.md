@@ -22,6 +22,7 @@
 | メモリ可視化 | Home 画面に Device RAM / App heap / Native heap の使用量表示を追加 |
 | ASR 作業計画 | `docs/asr-plan.md` に `sherpa-onnx` 前提の段階計画を追加 |
 | VAD 足場実装 | `EnergyVadEngine` + `MicrophoneVadMonitor` でローカル発話検知デバッグ UI を追加 |
+| VAD セグメント保存 | 発話終了ごとに `wav` をローカル保存し、Home 画面に直近セグメント一覧を表示 |
 
 ---
 
@@ -115,6 +116,8 @@ engine.createConversation(ConversationConfig(
 - `audio/MicrophoneVadMonitor.kt` でマイクから 16kHz mono PCM を読み取り、VAD に渡す形を追加
 - Home 画面に `Start VAD` / `Stop VAD`、`Speech detected`、`dBFS`、検出セグメント数、最後の発話長を表示
 - これは `sherpa-onnx` 導入前の足場であり、本命の VAD 実装とは切り替え前提
+- 発話終了時に `audio-segments/segment-*.wav` として保存し、直近 12 件を Home 画面で確認できる
+- `Clear segments` で保存済みセグメント一覧とローカル wav を削除できる
 
 ---
 

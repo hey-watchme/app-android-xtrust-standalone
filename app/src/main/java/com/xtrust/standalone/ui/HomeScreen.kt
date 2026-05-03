@@ -6,6 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -43,6 +44,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import kotlin.math.roundToInt
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun HomeScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
@@ -96,7 +100,8 @@ fun HomeScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
                 } else {
                     audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                 }
-            }
+            },
+            onClearSegments = viewModel::clearSavedSegments
         )
 
         Spacer(modifier = Modifier.height(12.dp))
@@ -231,7 +236,11 @@ private fun ChatStatusCard(uiState: UiState, onResetChat: () -> Unit) {
 }
 
 @Composable
-private fun VadDebugCard(vadState: VadDebugState, onToggleListening: () -> Unit) {
+private fun VadDebugCard(
+    vadState: VadDebugState,
+    onToggleListening: () -> Unit,
+    onClearSegments: () -> Unit
+) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
@@ -267,16 +276,64 @@ private fun VadDebugCard(vadState: VadDebugState, onToggleListening: () -> Unit)
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 2.dp)
             )
+            if (vadState.savedSegments.isNotEmpty()) {
+                Text(
+                    text = "Saved wav segments",
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.padding(top = 12.dp, bottom = 6.dp)
+                )
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(140.dp),
+                    contentPadding = PaddingValues(0.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    items(vadState.savedSegments, key = { it.id }) { segment ->
+                        SavedSegmentRow(segment)
+                    }
+                }
+            }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 12.dp),
-                horizontalArrangement = Arrangement.End
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
             ) {
+                OutlinedButton(
+                    onClick = onClearSegments,
+                    enabled = vadState.savedSegments.isNotEmpty() && !vadState.isListening
+                ) {
+                    Text("Clear segments")
+                }
                 Button(onClick = onToggleListening) {
                     Text(if (vadState.isListening) "Stop VAD" else "Start VAD")
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun SavedSegmentRow(segment: AudioSegment) {
+    val timeText = remember(segment.createdAt) {
+        SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(segment.createdAt))
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = segment.fileName,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1
+            )
+            Text(
+                text = "$timeText  ${segment.durationMs} ms  ${segment.sizeBytes / 1024} KB",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
