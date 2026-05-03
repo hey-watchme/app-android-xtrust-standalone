@@ -8,7 +8,7 @@ class EnergyVadEngine(
     private val startThresholdDb: Double = -40.0,
     private val continueThresholdDb: Double = -48.0,
     private val minSpeechFrames: Int = 4,
-    private val endSilenceFrames: Int = 24
+    private val endSilenceFrames: Int = 120
 ) : LocalVadEngine {
 
     private var isSpeechActive = false

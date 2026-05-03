@@ -27,6 +27,8 @@
 | VAD 再調整 | 発話継続側を甘くし、900ms 未満の短片を破棄して分割過多を抑制 |
 | ASR パス自動検出 | `files/asr/` 配下の既知 SenseVoice フォルダを自動検出し、2024/2025 両配置を拾えるように変更 |
 | ASR 権限診断 | Settings に `exists/read/exec` と `chmod 777` 手順を表示し、LLM と同種の shell-owner 問題を切り分け可能にした |
+| VAD 無音猶予延長 | 分割判定の無音時間を約 2.4 秒まで延ばし、1 秒前後の自然な間では切れにくくした |
+| 自動 ASR | 保存済み `wav` セグメントを自動で順次文字起こしするように変更 |
 
 ---
 
@@ -124,6 +126,7 @@ engine.createConversation(ConversationConfig(
 - `Clear segments` で保存済みセグメント一覧とローカル wav を削除できる
 - 継続判定の閾値を開始判定より低くするヒステリシスを追加し、短い無音で分割されにくくした
 - 900ms 未満の短い断片は保存しないようにして、1語ごとの細切れ wav を減らした
+- 無音が約 2.4 秒続いたときだけ分割するように変更し、通常会話の短い間では継続扱いにした
 
 ## 現在の ASR 実装
 
@@ -138,6 +141,7 @@ engine.createConversation(ConversationConfig(
 - 現在は `SenseVoice` を `language = "ja"`、`provider = "cpu"` でロードする
 - Settings に ASR モデルディレクトリの `exists/read/exec`、モデルファイル読取可否、サイズを表示
 - shell 所有ディレクトリに `adb push` した場合に備え、`chmod 777` の回復コマンドも Settings に表示
+- 保存されたセグメントは手動ボタンを待たず、そのまま自動で ASR に投入する
 
 ---
 

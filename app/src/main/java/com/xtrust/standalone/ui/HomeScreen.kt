@@ -286,7 +286,7 @@ private fun VadDebugCard(
                 modifier = Modifier.padding(top = 4.dp)
             )
             Text(
-                text = "Segments ${vadState.detectedSegments}  Last speech ${vadState.lastSpeechDurationMs} ms",
+                text = "Segments ${vadState.detectedSegments}  Last speech ${vadState.lastSpeechDurationMs} ms  Split after ${vadState.pauseSplitMs} ms silence",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 2.dp)
@@ -337,6 +337,12 @@ private fun AsrStatusCard(asrState: AsrDebugState) {
                     modifier = Modifier.padding(top = 6.dp)
                 )
             }
+            Text(
+                text = "Saved segments are transcribed automatically",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 6.dp)
+            )
         }
     }
 }

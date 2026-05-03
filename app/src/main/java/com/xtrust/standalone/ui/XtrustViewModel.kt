@@ -26,6 +26,8 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.ArrayDeque
@@ -77,6 +79,7 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
     private var nextChatMessageId = 1L
     private var nextSegmentId = 1L
     private val captureLock = Any()
+    private val asrTranscriptionMutex = Mutex()
     private val preRollFrames = ArrayDeque<ShortArray>()
     private val activeSpeechFrames = mutableListOf<ShortArray>()
     private val maxPreRollFrames = 10
@@ -368,49 +371,7 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
         updateSegment(segmentId) { it.copy(isTranscribing = true, asrError = null) }
 
         viewModelScope.launch {
-            if (!ensureAsrReady(showErrors = true)) {
-                updateSegment(segmentId) { it.copy(isTranscribing = false, asrError = "ASR model is not loaded") }
-                return@launch
-            }
-
-            val startedAt = System.currentTimeMillis()
-            try {
-                val transcript = asrEngine.transcribe(segment.filePath)
-                val elapsedMs = System.currentTimeMillis() - startedAt
-                val audioDurationMs = transcript.sampleCount * 1000L / transcript.sampleRate
-                val rtf = if (audioDurationMs > 0) {
-                    elapsedMs.toDouble() / audioDurationMs.toDouble()
-                } else {
-                    0.0
-                }
-
-                updateSegment(segmentId) {
-                    it.copy(
-                        transcript = transcript.text.ifBlank { "[no text]" },
-                        isTranscribing = false,
-                        asrError = null,
-                        transcriptionMs = elapsedMs,
-                        realTimeFactor = rtf
-                    )
-                }
-                _uiState.update {
-                    it.copy(
-                        asrDebugState = it.asrDebugState.copy(
-                            lastTranscriptionMs = elapsedMs,
-                            lastRealTimeFactor = rtf
-                        )
-                    )
-                }
-                refreshMemorySnapshot()
-            } catch (e: Exception) {
-                updateSegment(segmentId) {
-                    it.copy(
-                        isTranscribing = false,
-                        asrError = e.message ?: "Unknown ASR error"
-                    )
-                }
-                _uiState.update { it.copy(lastError = "ASR transcription failed: ${e.message}") }
-            }
+            transcribeSegmentInternal(segmentId, showErrors = true)
         }
     }
 
@@ -555,8 +516,69 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
                         )
                     )
                 }
+                if (AUTO_TRANSCRIBE_SEGMENTS) {
+                    viewModelScope.launch {
+                        updateSegment(segment.id) { currentSegment ->
+                            currentSegment.copy(isTranscribing = true, asrError = null)
+                        }
+                        transcribeSegmentInternal(segment.id, showErrors = false)
+                    }
+                }
             } catch (e: Exception) {
                 _uiState.update { it.copy(lastError = "セグメント保存失敗: ${e.message}") }
+            }
+        }
+    }
+
+    private suspend fun transcribeSegmentInternal(segmentId: Long, showErrors: Boolean) {
+        asrTranscriptionMutex.withLock {
+            val segment = _uiState.value.vadDebugState.savedSegments.firstOrNull { it.id == segmentId }
+            if (segment == null) return
+
+            if (!ensureAsrReady(showErrors = showErrors)) {
+                updateSegment(segmentId) { it.copy(isTranscribing = false, asrError = "ASR model is not loaded") }
+                return
+            }
+
+            val startedAt = System.currentTimeMillis()
+            try {
+                val transcript = asrEngine.transcribe(segment.filePath)
+                val elapsedMs = System.currentTimeMillis() - startedAt
+                val audioDurationMs = transcript.sampleCount * 1000L / transcript.sampleRate
+                val rtf = if (audioDurationMs > 0) {
+                    elapsedMs.toDouble() / audioDurationMs.toDouble()
+                } else {
+                    0.0
+                }
+
+                updateSegment(segmentId) {
+                    it.copy(
+                        transcript = transcript.text.ifBlank { "[no text]" },
+                        isTranscribing = false,
+                        asrError = null,
+                        transcriptionMs = elapsedMs,
+                        realTimeFactor = rtf
+                    )
+                }
+                _uiState.update {
+                    it.copy(
+                        asrDebugState = it.asrDebugState.copy(
+                            lastTranscriptionMs = elapsedMs,
+                            lastRealTimeFactor = rtf
+                        )
+                    )
+                }
+                refreshMemorySnapshot()
+            } catch (e: Exception) {
+                updateSegment(segmentId) {
+                    it.copy(
+                        isTranscribing = false,
+                        asrError = e.message ?: "Unknown ASR error"
+                    )
+                }
+                if (showErrors) {
+                    _uiState.update { it.copy(lastError = "ASR transcription failed: ${e.message}") }
+                }
             }
         }
     }
@@ -707,6 +729,7 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
     private companion object {
         const val SAMPLE_RATE = 16_000
         const val MIN_SEGMENT_DURATION_MS = 900L
+        const val AUTO_TRANSCRIBE_SEGMENTS = true
         val KNOWN_ASR_MODEL_DIR_NAMES = listOf(
             "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09",
             "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17"
