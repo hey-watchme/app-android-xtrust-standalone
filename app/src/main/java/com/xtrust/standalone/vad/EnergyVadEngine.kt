@@ -5,9 +5,10 @@ import kotlin.math.sqrt
 
 class EnergyVadEngine(
     private val sampleRate: Int = 16_000,
-    private val startThresholdDb: Double = -42.0,
-    private val minSpeechFrames: Int = 3,
-    private val endSilenceFrames: Int = 10
+    private val startThresholdDb: Double = -40.0,
+    private val continueThresholdDb: Double = -48.0,
+    private val minSpeechFrames: Int = 4,
+    private val endSilenceFrames: Int = 24
 ) : LocalVadEngine {
 
     private var isSpeechActive = false
@@ -19,8 +20,9 @@ class EnergyVadEngine(
         val rmsDb = calculateRmsDb(samples)
         var speechStarted = false
         var speechEnded = false
+        val thresholdDb = if (isSpeechActive) continueThresholdDb else startThresholdDb
 
-        if (rmsDb >= startThresholdDb) {
+        if (rmsDb >= thresholdDb) {
             consecutiveSpeechFrames += 1
             consecutiveSilenceFrames = 0
         } else {

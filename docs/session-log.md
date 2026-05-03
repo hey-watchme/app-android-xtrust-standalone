@@ -24,6 +24,8 @@
 | VAD 足場実装 | `EnergyVadEngine` + `MicrophoneVadMonitor` でローカル発話検知デバッグ UI を追加 |
 | VAD セグメント保存 | 発話終了ごとに `wav` をローカル保存し、Home 画面に直近セグメント一覧を表示 |
 | ファイル入力 ASR | `sherpa-onnx-1.12.39.aar` と SenseVoice 前提で保存済み `wav` を `Transcribe` 可能にした |
+| VAD 再調整 | 発話継続側を甘くし、900ms 未満の短片を破棄して分割過多を抑制 |
+| ASR パス自動検出 | `files/asr/` 配下の既知 SenseVoice フォルダを自動検出し、2024/2025 両配置を拾えるように変更 |
 
 ---
 
@@ -119,6 +121,8 @@ engine.createConversation(ConversationConfig(
 - これは `sherpa-onnx` 導入前の足場であり、本命の VAD 実装とは切り替え前提
 - 発話終了時に `audio-segments/segment-*.wav` として保存し、直近 12 件を Home 画面で確認できる
 - `Clear segments` で保存済みセグメント一覧とローカル wav を削除できる
+- 継続判定の閾値を開始判定より低くするヒステリシスを追加し、短い無音で分割されにくくした
+- 900ms 未満の短い断片は保存しないようにして、1語ごとの細切れ wav を減らした
 
 ## 現在の ASR 実装
 
@@ -126,9 +130,10 @@ engine.createConversation(ConversationConfig(
 - `asr/SherpaOnnxAsrEngine.kt` で `OfflineRecognizer` を使うファイル入力 ASR を実装
 - 保存済み `wav` セグメントごとに `Transcribe` ボタンを追加
 - 結果テキスト、推論時間、`RTF` を Home 画面に表示
-- 既定のモデル配置先は:
-  - `/sdcard/Android/data/com.xtrust.standalone/files/asr/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09/`
-  - 必要ファイルは `model.int8.onnx` と `tokens.txt`
+- 既定のモデル配置先は `files/asr/` 配下で、次を自動検出する:
+  - `sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09/`
+  - `sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/`
+  - そのほか `model.int8.onnx` と `tokens.txt` を持つ任意の子ディレクトリ
 - 現在は `SenseVoice` を `language = "ja"`、`provider = "cpu"` でロードする
 
 ---

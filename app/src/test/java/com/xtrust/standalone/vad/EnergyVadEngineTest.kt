@@ -40,6 +40,26 @@ class EnergyVadEngineTest {
         assertFalse(silence3.isSpeechDetected)
     }
 
+    @Test
+    fun keepsSpeechActiveAcrossSmallDropBelowStartThreshold() {
+        val vad = EnergyVadEngine(
+            startThresholdDb = -40.0,
+            continueThresholdDb = -50.0,
+            minSpeechFrames = 2,
+            endSilenceFrames = 3
+        )
+        val loudFrame = sineWaveFrame(amplitude = 12_000)
+        val mediumFrame = sineWaveFrame(amplitude = 2_500)
+
+        vad.processFrame(loudFrame)
+        val started = vad.processFrame(loudFrame)
+        val continued = vad.processFrame(mediumFrame)
+
+        assertTrue(started.isSpeechDetected)
+        assertTrue(continued.isSpeechDetected)
+        assertFalse(continued.speechEnded)
+    }
+
     private fun sineWaveFrame(amplitude: Int, size: Int = 320): ShortArray {
         return ShortArray(size) { index ->
             (sin(index.toDouble() / 10.0) * amplitude).toInt().toShort()

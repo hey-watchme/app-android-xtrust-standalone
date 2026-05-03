@@ -56,19 +56,16 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
         File(dir, "models").mkdirs()  // app が owner になるので chmod 不要
         File(dir, "models/gemma-4-E2B-it.litertlm").absolutePath
     }
+    private val appExternalDir: File = application.getExternalFilesDir(null) ?: application.filesDir
     private val segmentOutputDir: File = run {
-        val dir = application.getExternalFilesDir(null) ?: application.filesDir
-        File(dir, "audio-segments").apply { mkdirs() }
+        File(appExternalDir, "audio-segments").apply { mkdirs() }
     }
-    private val defaultAsrModelDirPath: String = run {
-        val dir = application.getExternalFilesDir(null) ?: application.filesDir
-        File(dir, "asr/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09").apply { mkdirs() }.absolutePath
-    }
+    private val asrBaseDir: File = File(appExternalDir, "asr").apply { mkdirs() }
 
     private val _uiState = MutableStateFlow(
         UiState(
             llmModelPath = defaultModelPath,
-            asrDebugState = AsrDebugState(modelDirPath = defaultAsrModelDirPath)
+            asrDebugState = AsrDebugState(modelDirPath = resolveAsrModelDirPath())
         )
     )
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
@@ -94,7 +91,7 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
         loadLlmModelInternal(modelPath, showMissingErrors = true)
     }
 
-    fun loadAsrModel(modelDirPath: String = defaultAsrModelDirPath) {
+    fun loadAsrModel(modelDirPath: String = resolveAsrModelDirPath()) {
         loadAsrModelInternal(modelDirPath, showMissingErrors = true)
     }
 
@@ -107,11 +104,10 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun autoLoadAsrModel() {
-        val modelDir = File(defaultAsrModelDirPath)
-        val modelFile = File(modelDir, SherpaOnnxAsrEngine.MODEL_FILE_NAME)
-        val tokensFile = File(modelDir, SherpaOnnxAsrEngine.TOKENS_FILE_NAME)
-        if (!modelFile.exists() || !tokensFile.exists()) return
-        loadAsrModelInternal(defaultAsrModelDirPath, showMissingErrors = false)
+        val modelDirPath = resolveAsrModelDirPath()
+        val modelDir = File(modelDirPath)
+        if (!hasAsrModelFiles(modelDir)) return
+        loadAsrModelInternal(modelDirPath, showMissingErrors = false)
     }
 
     private fun loadLlmModelInternal(modelPath: String, showMissingErrors: Boolean) {
@@ -456,6 +452,7 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
     private fun processVadFrame(frame: ShortArray, result: VadFrameResult) {
         var segmentToSave: ShortArray? = null
         var segmentDurationMs = 0L
+        var shouldPersistSegment = false
 
         synchronized(captureLock) {
             preRollFrames.addLast(frame.copyOf())
@@ -474,6 +471,7 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
             if (result.speechEnded && activeSpeechFrames.isNotEmpty()) {
                 segmentToSave = flattenFrames(activeSpeechFrames)
                 segmentDurationMs = calculateDurationMs(segmentToSave!!.size)
+                shouldPersistSegment = segmentDurationMs >= MIN_SEGMENT_DURATION_MS
                 activeSpeechFrames.clear()
                 preRollFrames.clear()
             }
@@ -486,7 +484,7 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
                     isSpeechDetected = result.isSpeechDetected,
                     rmsDb = result.rmsDb,
                     detectedSegments = current.vadDebugState.detectedSegments +
-                        if (result.speechEnded) 1 else 0,
+                        if (shouldPersistSegment) 1 else 0,
                     lastSpeechDurationMs = if (result.speechEnded || result.isSpeechDetected) {
                         result.speechDurationMs
                     } else {
@@ -496,7 +494,7 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
             )
         }
 
-        if (segmentToSave != null) {
+        if (segmentToSave != null && shouldPersistSegment) {
             saveSegment(segmentToSave!!, segmentDurationMs)
         }
     }
@@ -513,7 +511,18 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
             preRollFrames.clear()
         }
         if (segmentToSave != null && segmentToSave.isNotEmpty()) {
-            saveSegment(segmentToSave, calculateDurationMs(segmentToSave.size))
+            val durationMs = calculateDurationMs(segmentToSave.size)
+            if (durationMs >= MIN_SEGMENT_DURATION_MS) {
+                _uiState.update { current ->
+                    current.copy(
+                        vadDebugState = current.vadDebugState.copy(
+                            detectedSegments = current.vadDebugState.detectedSegments + 1,
+                            lastSpeechDurationMs = durationMs
+                        )
+                    )
+                }
+                saveSegment(segmentToSave, durationMs)
+            }
         }
     }
 
@@ -547,10 +556,10 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
     private suspend fun ensureAsrReady(showErrors: Boolean): Boolean {
         if (asrEngine.isReady) return true
 
-        val modelDir = _uiState.value.asrDebugState.modelDirPath.ifBlank { defaultAsrModelDirPath }
-        val modelFile = File(modelDir, SherpaOnnxAsrEngine.MODEL_FILE_NAME)
-        val tokensFile = File(modelDir, SherpaOnnxAsrEngine.TOKENS_FILE_NAME)
-        if (!modelFile.exists() || !tokensFile.exists()) {
+        val modelDir = resolveAsrModelDirPath(
+            preferredPath = _uiState.value.asrDebugState.modelDirPath
+        )
+        if (!hasAsrModelFiles(File(modelDir))) {
             if (showErrors) {
                 _uiState.update {
                     it.copy(
@@ -613,6 +622,31 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
         return sampleCount * 1000L / SAMPLE_RATE
     }
 
+    private fun resolveAsrModelDirPath(preferredPath: String? = null): String {
+        val candidateDirs = buildList {
+            preferredPath
+                ?.takeIf { it.isNotBlank() }
+                ?.let { add(File(it)) }
+            KNOWN_ASR_MODEL_DIR_NAMES.forEach { add(File(asrBaseDir, it)) }
+            asrBaseDir.listFiles()
+                ?.filter { it.isDirectory }
+                ?.sortedBy { it.name }
+                ?.forEach { add(it) }
+        }
+
+        val existingModelDir = candidateDirs.firstOrNull(::hasAsrModelFiles)
+        if (existingModelDir != null) {
+            return existingModelDir.absolutePath
+        }
+
+        return File(asrBaseDir, KNOWN_ASR_MODEL_DIR_NAMES.first()).apply { mkdirs() }.absolutePath
+    }
+
+    private fun hasAsrModelFiles(dir: File): Boolean {
+        return File(dir, SherpaOnnxAsrEngine.MODEL_FILE_NAME).exists() &&
+            File(dir, SherpaOnnxAsrEngine.TOKENS_FILE_NAME).exists()
+    }
+
     override fun onCleared() {
         super.onCleared()
         viewModelScope.launch {
@@ -624,5 +658,10 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
 
     private companion object {
         const val SAMPLE_RATE = 16_000
+        const val MIN_SEGMENT_DURATION_MS = 900L
+        val KNOWN_ASR_MODEL_DIR_NAMES = listOf(
+            "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09",
+            "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17"
+        )
     }
 }

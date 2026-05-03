@@ -280,7 +280,7 @@ private fun VadDebugCard(
                 modifier = Modifier.padding(top = 8.dp)
             )
             Text(
-                text = "Level ${vadState.rmsDb.roundToInt()} dBFS  Threshold ${vadState.thresholdDb.roundToInt()} dBFS",
+                text = "Level ${vadState.rmsDb.roundToInt()} dBFS  Start ${vadState.thresholdDb.roundToInt()} dBFS  Hold ${vadState.continueThresholdDb.roundToInt()} dBFS",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp)

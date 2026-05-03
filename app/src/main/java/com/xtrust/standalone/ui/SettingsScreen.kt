@@ -100,7 +100,7 @@ fun SettingsScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
         }
 
         Text(
-            text = "Place these files in the directory above:\n- model.int8.onnx\n- tokens.txt",
+            text = "Place these files in the directory above:\n- model.int8.onnx\n- tokens.txt\n\nThe app auto-detects known SenseVoice folders under `files/asr/` if the files exist there.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 8.dp)
