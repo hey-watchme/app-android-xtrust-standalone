@@ -1,0 +1,67 @@
+cmake_minimum_required(VERSION 3.31.6)
+
+project("bonsai-runtime" VERSION 1.0.0 LANGUAGES C CXX)
+
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED true)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED true)
+
+if(DEFINED ANDROID_ABI)
+    if(ANDROID_ABI STREQUAL "arm64-v8a")
+        set(GGML_SYSTEM_ARCH "ARM")
+        set(GGML_CPU_KLEIDIAI ON)
+        set(GGML_OPENMP ON)
+    elseif(ANDROID_ABI STREQUAL "x86_64")
+        set(GGML_SYSTEM_ARCH "x86")
+        set(GGML_CPU_KLEIDIAI OFF)
+        set(GGML_OPENMP OFF)
+    else()
+        message(FATAL_ERROR "Unsupported ABI: ${ANDROID_ABI}")
+    endif()
+endif()
+
+include(FetchContent)
+
+set(LLAMA_BUILD_COMMON ON CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_SERVER OFF CACHE BOOL "" FORCE)
+set(LLAMA_OPENSSL OFF CACHE BOOL "" FORCE)
+set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
+set(GGML_BACKEND_DL ON CACHE BOOL "" FORCE)
+set(GGML_CPU_ALL_VARIANTS ON CACHE BOOL "" FORCE)
+set(GGML_LLAMAFILE OFF CACHE BOOL "" FORCE)
+
+FetchContent_Declare(
+    llamacpp
+    GIT_REPOSITORY https://github.com/ggml-org/llama.cpp.git
+    GIT_TAG fa8feaed34ee89f246bc46e3f487a97fdd6e9ac7
+    GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(llamacpp)
+
+add_library(${CMAKE_PROJECT_NAME} SHARED
+    bonsai_runtime.cpp
+)
+
+target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
+    GGML_SYSTEM_ARCH=${GGML_SYSTEM_ARCH}
+    GGML_CPU_KLEIDIAI=$<BOOL:${GGML_CPU_KLEIDIAI}>
+    GGML_OPENMP=$<BOOL:${GGML_OPENMP}>
+)
+
+target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
+    ${llamacpp_SOURCE_DIR}
+    ${llamacpp_SOURCE_DIR}/common
+    ${llamacpp_SOURCE_DIR}/include
+    ${llamacpp_SOURCE_DIR}/ggml/include
+    ${llamacpp_SOURCE_DIR}/ggml/src
+)
+
+target_link_libraries(${CMAKE_PROJECT_NAME}
+    llama
+    llama-common
+    android
+    log
+)

@@ -56,6 +56,9 @@ import com.xtrust.standalone.ui.theme.TextTertiary
 fun ChatScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
     val uiState by viewModel.uiState.collectAsState()
     val messages by viewModel.chatMessages.collectAsState()
+    val selectedLlm = uiState.availableLlmOptions.firstOrNull { it.id == uiState.selectedLlmId }
+    val loadedLlm = uiState.availableLlmOptions.firstOrNull { it.id == uiState.loadedLlmId }
+    val assistantLabel = loadedLlm?.assistantLabel ?: selectedLlm?.assistantLabel ?: "AI"
     val listState = rememberLazyListState()
     var draft by rememberSaveable { mutableStateOf("") }
 
@@ -73,13 +76,13 @@ fun ChatScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
             .padding(Spacing.xl)
     ) {
         Text(
-            text = "Local chat",
+            text = "ローカルチャット",
             style = MaterialTheme.typography.headlineSmall,
             color = TextPrimary
         )
         Spacer(modifier = Modifier.height(Spacing.xs))
         Text(
-            text = "Use this screen for multi-turn Gemma testing. Audio capture and Sherpa-ONNX monitoring stay on Home.",
+            text = "端末内 LLM の対話品質を確認する画面です。録音と文字起こしの検証はホームで行います。",
             style = MaterialTheme.typography.bodySmall,
             color = TextTertiary
         )
@@ -97,6 +100,8 @@ fun ChatScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
             item {
                 ChatStatusCard(
                     uiState = uiState,
+                    selectedLlm = selectedLlm,
+                    loadedLlm = loadedLlm,
                     onResetChat = viewModel::resetChat
                 )
             }
@@ -107,18 +112,24 @@ fun ChatScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
 
             if (messages.isEmpty()) {
                 item {
-                    EmptyChatState(llmReady = uiState.llmReady)
+                    EmptyChatState(
+                        llmReady = uiState.llmReady,
+                        selectedLlm = selectedLlm
+                    )
                 }
             } else {
                 items(messages, key = { it.id }) { message ->
-                    ChatBubble(message = message)
+                    ChatBubble(
+                        message = message,
+                        assistantLabel = assistantLabel
+                    )
                     Spacer(modifier = Modifier.height(Spacing.md))
                 }
             }
 
             if (uiState.isProcessing) {
                 item {
-                    ThinkingBubble()
+                    ThinkingBubble(assistantLabel = assistantLabel)
                 }
             }
         }
@@ -140,7 +151,7 @@ fun ChatScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
             minLines = 3,
             maxLines = 6,
             shape = RoundedCornerShape(Radius.md),
-            label = { Text("Message") },
+            label = { Text("メッセージ") },
             placeholder = { Text("日本語で質問や指示を入力") },
             colors = OutlinedTextFieldDefaults.colors(
                 focusedBorderColor = AccentPrimary,
@@ -167,7 +178,7 @@ fun ChatScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
                 border = BorderStroke(Sizes.hairline, DividerStrong),
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary)
             ) {
-                Text("Clear")
+                Text("入力を消去")
             }
 
             Button(
@@ -183,14 +194,19 @@ fun ChatScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
                     contentColor = AccentOnPrimary
                 )
             ) {
-                Text("Send")
+                Text("送信")
             }
         }
     }
 }
 
 @Composable
-private fun ChatStatusCard(uiState: UiState, onResetChat: () -> Unit) {
+private fun ChatStatusCard(
+    uiState: UiState,
+    selectedLlm: LlmModelOption?,
+    loadedLlm: LlmModelOption?,
+    onResetChat: () -> Unit
+) {
     val memory = uiState.memorySnapshot
     Column(
         modifier = Modifier
@@ -200,32 +216,44 @@ private fun ChatStatusCard(uiState: UiState, onResetChat: () -> Unit) {
             .padding(Spacing.lg)
     ) {
         Text(
-            text = if (uiState.llmReady) "Gemma 4 E2B ready" else "Gemma 4 E2B not loaded",
+            text = if (uiState.llmReady) {
+                "${loadedLlm?.displayName ?: "ローカル LLM"} を使用中"
+            } else {
+                "${selectedLlm?.displayName ?: "ローカル LLM"} は未ロードです"
+            },
             style = MaterialTheme.typography.titleSmall,
             color = if (uiState.llmReady) StatusReady else StatusError
         )
         Spacer(modifier = Modifier.height(Spacing.xs))
         Text(
-            text = "Device RAM ${memory.deviceUsedMb} / ${memory.deviceTotalMb} MB used",
+            text = "端末メモリ ${memory.deviceUsedMb} / ${memory.deviceTotalMb} MB 使用中",
             style = MaterialTheme.typography.labelSmall,
             color = TextSecondary
         )
         Spacer(modifier = Modifier.height(Spacing.xs))
         Text(
-            text = "App heap ${memory.appHeapUsedMb} / ${memory.appHeapMaxMb} MB",
+            text = "アプリヒープ ${memory.appHeapUsedMb} / ${memory.appHeapMaxMb} MB",
             style = MaterialTheme.typography.labelSmall,
             color = TextSecondary
         )
         Spacer(modifier = Modifier.height(Spacing.xs))
         Text(
-            text = "Native heap ${memory.nativeHeapMb} MB  Available ${memory.deviceAvailableMb} MB",
+            text = "ネイティブヒープ ${memory.nativeHeapMb} MB  空き ${memory.deviceAvailableMb} MB",
             style = MaterialTheme.typography.labelSmall,
             color = TextSecondary
         )
+        if (selectedLlm != null && loadedLlm != null && selectedLlm.id != loadedLlm.id) {
+            Spacer(modifier = Modifier.height(Spacing.xs))
+            Text(
+                text = "切替先として ${selectedLlm.displayName} が選択されています。切替は設定画面で実行します。",
+                style = MaterialTheme.typography.labelSmall,
+                color = TextTertiary
+            )
+        }
         if (memory.lowMemory) {
             Spacer(modifier = Modifier.height(Spacing.xs))
             Text(
-                text = "System low-memory signal detected",
+                text = "システムから低メモリ警告を受けています",
                 style = MaterialTheme.typography.labelSmall,
                 color = StatusError
             )
@@ -243,14 +271,14 @@ private fun ChatStatusCard(uiState: UiState, onResetChat: () -> Unit) {
                 border = BorderStroke(Sizes.hairline, DividerStrong),
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary)
             ) {
-                Text("New chat")
+                Text("会話をリセット")
             }
         }
     }
 }
 
 @Composable
-private fun EmptyChatState(llmReady: Boolean) {
+private fun EmptyChatState(llmReady: Boolean, selectedLlm: LlmModelOption?) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -260,16 +288,18 @@ private fun EmptyChatState(llmReady: Boolean) {
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
-            text = if (llmReady) "Start a local chat" else "Load the model first",
+            text = if (llmReady) "会話を始めてください" else "モデルを読み込んでください",
             style = MaterialTheme.typography.titleMedium,
             color = TextPrimary
         )
         Spacer(modifier = Modifier.height(Spacing.xs))
         Text(
             text = if (llmReady) {
-                "Use this screen to test multi-turn local chat on the device."
+                "複数ターンの対話品質を、端末上だけで確認できます。"
+            } else if (selectedLlm?.isLoadable == false) {
+                "${selectedLlm.displayName} はまだ未接続です。設定画面で実装済みモデルを選んでください。"
             } else {
-                "Open Settings if auto-load did not complete."
+                "自動ロードされていない場合は、設定画面からモデルを読み込んでください。"
             },
             style = MaterialTheme.typography.bodyMedium,
             color = TextSecondary
@@ -278,12 +308,12 @@ private fun EmptyChatState(llmReady: Boolean) {
 }
 
 @Composable
-private fun ChatBubble(message: ChatMessage) {
+private fun ChatBubble(message: ChatMessage, assistantLabel: String) {
     val isUser = message.role == ChatRole.User
     val bubbleColor = if (isUser) AccentPrimary else SurfaceSubtle
     val textColor = if (isUser) AccentOnPrimary else TextPrimary
     val alignment = if (isUser) Alignment.End else Alignment.Start
-    val label = if (isUser) "You" else "Gemma"
+    val label = if (isUser) "あなた" else assistantLabel
     val bubbleShape = if (isUser) {
         RoundedCornerShape(
             topStart = Radius.lg,
@@ -326,7 +356,7 @@ private fun ChatBubble(message: ChatMessage) {
 }
 
 @Composable
-private fun ThinkingBubble() {
+private fun ThinkingBubble(assistantLabel: String) {
     val bubbleShape = RoundedCornerShape(
         topStart = Radius.lg,
         topEnd = Radius.lg,
@@ -338,7 +368,7 @@ private fun ThinkingBubble() {
         horizontalAlignment = Alignment.Start
     ) {
         Text(
-            text = "Gemma",
+            text = assistantLabel,
             style = MaterialTheme.typography.labelSmall,
             color = TextTertiary,
             modifier = Modifier.padding(bottom = Spacing.xs)
@@ -357,7 +387,7 @@ private fun ThinkingBubble() {
                 modifier = Modifier.size(16.dp)
             )
             Text(
-                text = "Generating response...",
+                text = "応答を生成しています…",
                 style = MaterialTheme.typography.bodyMedium,
                 color = TextSecondary
             )

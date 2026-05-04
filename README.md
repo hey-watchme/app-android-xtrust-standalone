@@ -13,6 +13,28 @@ Current implementation status and restart notes are tracked in:
 - `docs/session-log.md`
 - `docs/asr-plan.md`
 
+## Build Flavors (LLM runtime)
+
+この PoC は「同一 APK に複数ランタイム同梱」を避けるため、LLM runtime を build flavor で分離します（4GB 端末前提）。
+
+- `gemmaDebug`
+  - `applicationId`: `com.xtrust.standalone.gemma`
+  - runtime: LiteRT-LM
+  - model path: `/sdcard/Android/data/com.xtrust.standalone.gemma/files/models/gemma-4-E2B-it.litertlm`
+- `bonsaiDebug`
+  - `applicationId`: `com.xtrust.standalone.bonsai`
+  - runtime: llama.cpp (GGUF)
+  - model path: `/sdcard/Android/data/com.xtrust.standalone.bonsai/files/models/Bonsai-1.7B-Q1_0.gguf`
+
+ビルド:
+
+```bash
+./gradlew :app:assembleGemmaDebug
+./gradlew :app:assembleBonsaiDebug
+```
+
+Bonsai の導入と実機ベンチ手順は `docs/bonsai-runtime.md` を参照してください。
+
 ## UI Design (2026-05-04)
 
 Applied Notion-style modern design system to the app:

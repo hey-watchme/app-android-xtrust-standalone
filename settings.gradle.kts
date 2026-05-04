@@ -24,3 +24,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "xtrust-standalone"
 include(":app")
+include(":bonsai-runtime")

@@ -12,6 +12,18 @@ data class ChatMessage(
     val createdAt: Long = System.currentTimeMillis()
 )
 
+data class LlmModelOption(
+    val id: String,
+    val displayName: String,
+    val assistantLabel: String,
+    val providerLabel: String,
+    val runtimeLabel: String,
+    val description: String,
+    val modelPath: String,
+    val isLoadable: Boolean,
+    val implementationNote: String? = null
+)
+
 data class MemorySnapshot(
     val deviceTotalMb: Long = 0,
     val deviceUsedMb: Long = 0,

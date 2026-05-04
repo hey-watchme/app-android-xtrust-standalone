@@ -13,7 +13,9 @@ import com.xtrust.standalone.asr.LocalAsrEngine
 import com.xtrust.standalone.asr.SherpaOnnxAsrEngine
 import com.xtrust.standalone.data.TopicEntity
 import com.xtrust.standalone.data.TranscriptRepository
-import com.xtrust.standalone.llm.LiteRtGemmaEngine
+import com.xtrust.standalone.llm.LlmDiagnostics
+import com.xtrust.standalone.llm.LocalLlmCatalog
+import com.xtrust.standalone.llm.LocalLlmDefinition
 import com.xtrust.standalone.llm.LocalLlmEngine
 import com.xtrust.standalone.vad.EnergyVadEngine
 import com.xtrust.standalone.vad.VadFrameResult
@@ -39,8 +41,14 @@ import java.util.Locale
 data class UiState(
     val llmReady: Boolean = false,
     val llmModelPath: String = "",
+    val selectedLlmId: String = "",
+    val loadedLlmId: String? = null,
+    val availableLlmOptions: List<LlmModelOption> = emptyList(),
     val isProcessing: Boolean = false,
     val lastError: String? = null,
+    val llmRuntimeInfo: String = "",
+    val llmBenchmarkResult: String? = null,
+    val isRunningBenchmark: Boolean = false,
     val memorySnapshot: MemorySnapshot = MemorySnapshot(),
     val vadDebugState: VadDebugState = VadDebugState(),
     val asrDebugState: AsrDebugState = AsrDebugState()
@@ -49,17 +57,18 @@ data class UiState(
 class XtrustViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository = TranscriptRepository(application.applicationContext)
-    private val llmEngine: LocalLlmEngine = LiteRtGemmaEngine()
+    private var llmEngine: LocalLlmEngine? = null
     private val asrEngine: LocalAsrEngine = SherpaOnnxAsrEngine()
     private val vadEngine = EnergyVadEngine()
     private val microphoneVadMonitor = MicrophoneVadMonitor(vadEngine)
 
-    private val defaultModelPath: String = run {
+    private val modelBaseDir: File = run {
         val dir = application.getExternalFilesDir(null)
             ?: application.filesDir
-        File(dir, "models").mkdirs()  // app が owner になるので chmod 不要
-        File(dir, "models/gemma-4-E2B-it.litertlm").absolutePath
+        File(dir, "models").apply { mkdirs() } // app が owner になるので chmod 不要
     }
+    private val llmDefinitions = LocalLlmCatalog.create(modelBaseDir)
+    private val defaultLlmDefinition = llmDefinitions.first { it.id == LocalLlmCatalog.DEFAULT_MODEL_ID }
     private val appExternalDir: File = application.getExternalFilesDir(null) ?: application.filesDir
     private val segmentOutputDir: File = run {
         File(appExternalDir, "audio-segments").apply { mkdirs() }
@@ -68,7 +77,9 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _uiState = MutableStateFlow(
         UiState(
-            llmModelPath = defaultModelPath,
+            llmModelPath = defaultLlmDefinition.modelPath,
+            selectedLlmId = defaultLlmDefinition.id,
+            availableLlmOptions = llmDefinitions.map(::toLlmModelOption),
             asrDebugState = AsrDebugState(modelDirPath = resolveAsrModelDirPath())
         )
     )
@@ -98,8 +109,11 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
         autoLoadAsrModel()
     }
 
-    fun loadLlmModel(modelPath: String = defaultModelPath) {
-        loadLlmModelInternal(modelPath, showMissingErrors = true)
+    fun loadLlmModel() {
+        loadLlmModelInternal(
+            definition = selectedLlmDefinition() ?: return,
+            showMissingErrors = true
+        )
     }
 
     fun loadAsrModel(modelDirPath: String = resolveAsrModelDirPath()) {
@@ -107,11 +121,209 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun autoLoadLlmModel() {
-        val file = File(defaultModelPath)
-        if (!file.exists() || file.length() < 1_000_000_000L) {
+        val candidate = llmDefinitions.firstOrNull { definition ->
+            definition.isLoadable && hasCompleteLlmModelFile(definition)
+        } ?: return
+
+        _uiState.update {
+            it.copy(
+                selectedLlmId = candidate.id,
+                llmModelPath = candidate.modelPath
+            )
+        }
+        loadLlmModelInternal(candidate, showMissingErrors = false)
+    }
+
+    fun selectLlmModel(modelId: String) {
+        val definition = llmDefinitions.firstOrNull { it.id == modelId } ?: return
+        _uiState.update {
+            it.copy(
+                selectedLlmId = definition.id,
+                llmModelPath = definition.modelPath,
+                lastError = null,
+                llmBenchmarkResult = null
+            )
+        }
+    }
+
+    fun releaseLlmModel() {
+        releaseCurrentLlmEngine()
+        clearLlmLoadedState(clearChat = true, clearLastError = true)
+        refreshMemorySnapshot()
+    }
+
+    private fun hasCompleteLlmModelFile(definition: LocalLlmDefinition): Boolean {
+        val file = File(definition.modelPath)
+        return file.exists() && file.length() >= definition.minimumFileSizeBytes
+    }
+
+    private fun selectedLlmDefinition(): LocalLlmDefinition? {
+        return llmDefinitions.firstOrNull { it.id == _uiState.value.selectedLlmId } ?: llmDefinitions.firstOrNull()
+    }
+
+    private fun loadedLlmDefinition(): LocalLlmDefinition? {
+        val loadedId = _uiState.value.loadedLlmId ?: return null
+        return llmDefinitions.firstOrNull { it.id == loadedId }
+    }
+
+    private fun toLlmModelOption(definition: LocalLlmDefinition): LlmModelOption {
+        return LlmModelOption(
+            id = definition.id,
+            displayName = definition.displayName,
+            assistantLabel = definition.assistantLabel,
+            providerLabel = definition.providerLabel,
+            runtimeLabel = definition.runtimeLabel,
+            description = definition.description,
+            modelPath = definition.modelPath,
+            isLoadable = definition.isLoadable,
+            implementationNote = definition.implementationNote
+        )
+    }
+
+    private fun releaseCurrentLlmEngine() {
+        llmEngine?.close()
+        llmEngine = null
+    }
+
+    private fun clearLlmLoadedState(clearChat: Boolean, clearLastError: Boolean) {
+        if (clearChat) {
+            _chatMessages.value = emptyList()
+        }
+        _uiState.update { current ->
+            current.copy(
+                llmReady = false,
+                loadedLlmId = null,
+                lastError = if (clearLastError) null else current.lastError,
+                llmRuntimeInfo = "",
+                llmBenchmarkResult = null,
+                isRunningBenchmark = false
+            )
+        }
+    }
+
+    private fun loadLlmModelInternal(definition: LocalLlmDefinition, showMissingErrors: Boolean) {
+        if (_uiState.value.isProcessing) return
+
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    selectedLlmId = definition.id,
+                    llmModelPath = definition.modelPath,
+                    isProcessing = true,
+                    lastError = null
+                )
+            }
+
+            if (!definition.isLoadable) {
+                _uiState.update {
+                    it.copy(
+                        isProcessing = false,
+                        lastError = definition.implementationNote
+                            ?: "${definition.displayName} はまだ接続されていません。"
+                    )
+                }
+                return@launch
+            }
+
+            val file = File(definition.modelPath)
+            Log.d("XtrustVM", "checking path: ${definition.modelPath} exists=${file.exists()} size=${file.length()}")
+            when {
+                !file.exists() ->
+                    _uiState.update {
+                        it.copy(
+                            isProcessing = false,
+                            lastError = if (showMissingErrors) {
+                                "${definition.displayName} のモデルファイルが見つかりません。配置を確認してください。"
+                            } else {
+                                null
+                            }
+                        )
+                    }
+                file.length() < definition.minimumFileSizeBytes ->
+                    _uiState.update {
+                        it.copy(
+                            isProcessing = false,
+                            lastError = if (showMissingErrors) {
+                                "${definition.displayName} のモデルファイルが不完全です（${file.length() / 1_000_000}MB）。転送完了後に再試行してください。"
+                            } else {
+                                null
+                            }
+                        )
+                    }
+                else -> try {
+                    releaseCurrentLlmEngine()
+                    clearLlmLoadedState(clearChat = true, clearLastError = false)
+
+                    val engine = checkNotNull(definition.engineFactory).invoke(getApplication())
+                    engine.initialize(definition.modelPath)
+                    llmEngine = engine
+                    val runtimeInfo = (engine as? LlmDiagnostics)?.runtimeInfo().orEmpty()
+
+                    _uiState.update {
+                        it.copy(
+                            llmReady = true,
+                            loadedLlmId = definition.id,
+                            llmModelPath = definition.modelPath,
+                            isProcessing = false,
+                            llmRuntimeInfo = runtimeInfo,
+                            llmBenchmarkResult = null,
+                            isRunningBenchmark = false
+                        )
+                    }
+                    refreshMemorySnapshot()
+                } catch (e: Exception) {
+                    releaseCurrentLlmEngine()
+                    clearLlmLoadedState(clearChat = true, clearLastError = false)
+                    _uiState.update {
+                        it.copy(
+                            isProcessing = false,
+                            lastError = "ロード失敗: ${e.message}"
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun runLlmBenchmark() {
+        val engine = llmEngine as? LlmDiagnostics
+        if (engine == null) {
+            _uiState.update {
+                it.copy(lastError = "このランタイムはベンチマーク未対応です。")
+            }
             return
         }
-        loadLlmModelInternal(defaultModelPath, showMissingErrors = false)
+        if (_uiState.value.isProcessing || _uiState.value.isRunningBenchmark) return
+
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    isRunningBenchmark = true,
+                    lastError = null,
+                    llmBenchmarkResult = null
+                )
+            }
+            try {
+                val result = engine.benchmark()
+                val runtimeInfo = engine.runtimeInfo()
+                _uiState.update {
+                    it.copy(
+                        llmRuntimeInfo = runtimeInfo,
+                        llmBenchmarkResult = result,
+                        isRunningBenchmark = false
+                    )
+                }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(
+                        isRunningBenchmark = false,
+                        lastError = "ベンチマーク失敗: ${e.message}"
+                    )
+                }
+            } finally {
+                refreshMemorySnapshot()
+            }
+        }
     }
 
     private fun autoLoadAsrModel() {
@@ -122,61 +334,6 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
             return
         }
         loadAsrModelInternal(modelDirPath, showMissingErrors = false)
-    }
-
-    private fun loadLlmModelInternal(modelPath: String, showMissingErrors: Boolean) {
-        if (_uiState.value.isProcessing) return
-        if (_uiState.value.llmReady && _uiState.value.llmModelPath == modelPath) return
-
-        viewModelScope.launch {
-            _uiState.update { it.copy(isProcessing = true, lastError = null) }
-            val file = File(modelPath)
-            Log.d("XtrustVM", "checking path: $modelPath  exists=${file.exists()}  size=${file.length()}")
-            when {
-                !file.exists() ->
-                    _uiState.update {
-                        it.copy(
-                            isProcessing = false,
-                            lastError = if (showMissingErrors) {
-                                "モデルファイルが見つかりません。管理者に配置を依頼してください。"
-                            } else {
-                                null
-                            }
-                        )
-                    }
-                file.length() < 1_000_000_000L ->
-                    _uiState.update {
-                        it.copy(
-                            isProcessing = false,
-                            lastError = if (showMissingErrors) {
-                                "モデルファイルが不完全です（${file.length() / 1_000_000}MB）。転送が完了してから再試行してください。"
-                            } else {
-                                null
-                            }
-                        )
-                    }
-                else -> try {
-                    llmEngine.initialize(modelPath)
-                    _chatMessages.value = emptyList()
-                    _uiState.update {
-                        it.copy(
-                            llmReady = true,
-                            llmModelPath = modelPath,
-                            isProcessing = false
-                        )
-                    }
-                    refreshMemorySnapshot()
-                } catch (e: Exception) {
-                    _uiState.update {
-                        it.copy(
-                            llmReady = false,
-                            isProcessing = false,
-                            lastError = "ロード失敗: ${e.message}"
-                        )
-                    }
-                }
-            }
-        }
     }
 
     private fun loadAsrModelInternal(modelDirPath: String, showMissingErrors: Boolean) {
@@ -251,7 +408,8 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun summarizeTranscript(transcript: String) {
-        if (!llmEngine.isReady) return
+        val engine = llmEngine ?: return
+        val loadedDefinition = loadedLlmDefinition() ?: return
         viewModelScope.launch {
             _uiState.update { it.copy(isProcessing = true, lastError = null) }
             try {
@@ -263,15 +421,15 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
                     Conversation:
                     $transcript
                 """.trimIndent()
-                val result = llmEngine.generate(prompt)
+                val result = engine.generate(prompt)
                 val topic = TopicEntity(
                     sessionId = currentOrLatestSessionId(),
                     title = result.lines().firstOrNull() ?: "Topic",
                     summary = result,
                     startAt = System.currentTimeMillis(),
                     endAt = System.currentTimeMillis(),
-                    llmProvider = "litert-lm",
-                    llmModel = "gemma4-e2b"
+                    llmProvider = loadedDefinition.dbProvider,
+                    llmModel = loadedDefinition.dbModel
                 )
                 repository.saveTopic(topic)
             } finally {
@@ -284,8 +442,10 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
     fun sendChatMessage(message: String) {
         val trimmed = message.trim()
         if (trimmed.isEmpty()) return
-        if (!llmEngine.isReady) {
-            _uiState.update { it.copy(lastError = "Gemma 4 E2B が未ロードです。Settings で確認してください。") }
+        val engine = llmEngine
+        if (engine == null || !engine.isReady) {
+            val selectedName = selectedLlmDefinition()?.displayName ?: "ローカル LLM"
+            _uiState.update { it.copy(lastError = "$selectedName が未ロードです。設定画面で確認してください。") }
             return
         }
 
@@ -293,7 +453,7 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             _uiState.update { it.copy(isProcessing = true, lastError = null) }
             try {
-                val reply = llmEngine.sendChatMessage(trimmed)
+                val reply = engine.sendChatMessage(trimmed)
                 appendChatMessage(ChatRole.Assistant, reply)
             } catch (e: Exception) {
                 _uiState.update { it.copy(lastError = "チャット失敗: ${e.message}") }
@@ -305,7 +465,7 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun resetChat() {
-        llmEngine.resetChat()
+        llmEngine?.resetChat()
         _chatMessages.value = emptyList()
         _uiState.update { it.copy(lastError = null) }
         refreshMemorySnapshot()
@@ -797,7 +957,7 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
         }
         super.onCleared()
         asrEngine.close()
-        llmEngine.close()
+        releaseCurrentLlmEngine()
     }
 
     private companion object {

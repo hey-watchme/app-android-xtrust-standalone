@@ -3,18 +3,18 @@ package com.xtrust.standalone.llm
 import android.util.Log
 import com.google.ai.edge.litertlm.Backend
 import com.google.ai.edge.litertlm.Conversation
-import com.google.ai.edge.litertlm.Contents
 import com.google.ai.edge.litertlm.ConversationConfig
+import com.google.ai.edge.litertlm.Contents
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-private const val TAG = "LiteRtGemmaEngine"
+private const val TAG = "LiteRtLlmEngine"
 private const val DEFAULT_SYSTEM_PROMPT =
     "You are a concise assistant. Reply in the same language as the user."
 
-class LiteRtGemmaEngine : LocalLlmEngine {
+class LiteRtLlmEngine : LocalLlmEngine {
 
     private var engine: Engine? = null
     private var chatConversation: Conversation? = null
@@ -29,17 +29,17 @@ class LiteRtGemmaEngine : LocalLlmEngine {
             modelPath = modelPath,
             backend = Backend.CPU()
         )
-        val e = Engine(config)
-        e.initialize()
-        engine = e
-        chatConversation = createConversation(e)
+        val loadedEngine = Engine(config)
+        loadedEngine.initialize()
+        engine = loadedEngine
+        chatConversation = createConversation(loadedEngine)
         isReady = true
         Log.d(TAG, "Engine ready")
     }
 
     override suspend fun generate(prompt: String): String = withContext(Dispatchers.IO) {
-        val e = checkNotNull(engine) { "Engine not initialized" }
-        e.createConversation(createConversationConfig()).use { conversation ->
+        val loadedEngine = checkNotNull(engine) { "Engine not initialized" }
+        loadedEngine.createConversation(createConversationConfig()).use { conversation ->
             renderResponse(conversation, prompt)
         }
     }
@@ -50,9 +50,9 @@ class LiteRtGemmaEngine : LocalLlmEngine {
     }
 
     override fun resetChat() {
-        val e = engine ?: return
+        val loadedEngine = engine ?: return
         chatConversation?.close()
-        chatConversation = createConversation(e)
+        chatConversation = createConversation(loadedEngine)
     }
 
     override fun close() {

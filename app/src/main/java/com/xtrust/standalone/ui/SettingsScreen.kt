@@ -1,6 +1,8 @@
 package com.xtrust.standalone.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -19,6 +21,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -30,6 +33,7 @@ import androidx.compose.ui.text.font.FontFamily
 import com.xtrust.standalone.ui.theme.AccentOnPrimary
 import com.xtrust.standalone.ui.theme.AccentPrimary
 import com.xtrust.standalone.ui.theme.DividerSubtle
+import com.xtrust.standalone.ui.theme.DividerStrong
 import com.xtrust.standalone.ui.theme.Radius
 import com.xtrust.standalone.ui.theme.Sizes
 import com.xtrust.standalone.ui.theme.Spacing
@@ -45,6 +49,9 @@ import com.xtrust.standalone.ui.theme.TextTertiary
 @Composable
 fun SettingsScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
     val uiState by viewModel.uiState.collectAsState()
+    val selectedLlm = uiState.availableLlmOptions.firstOrNull { it.id == uiState.selectedLlmId }
+    val loadedLlm = uiState.availableLlmOptions.firstOrNull { it.id == uiState.loadedLlmId }
+    val selectedLlmFileName = selectedLlm?.modelPath?.substringAfterLast('/') ?: "model.litertlm"
 
     Column(
         modifier = modifier
@@ -53,10 +60,10 @@ fun SettingsScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
             .verticalScroll(rememberScrollState())
             .padding(Spacing.xl)
     ) {
-        SectionLabel(text = "LLM ENGINE")
+        SectionLabel(text = "ローカル LLM")
         Spacer(modifier = Modifier.height(Spacing.sm))
         Text(
-            text = "LLM Engine",
+            text = "チャット用モデル",
             style = MaterialTheme.typography.titleMedium,
             color = TextPrimary
         )
@@ -64,40 +71,136 @@ fun SettingsScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
         Spacer(modifier = Modifier.height(Spacing.sm))
         StatusRow(
             ready = uiState.llmReady,
-            readyText = "Gemma 4 E2B — ready",
-            notReadyText = "Not loaded"
+            readyText = "${loadedLlm?.displayName ?: "ローカル LLM"} をロード中",
+            notReadyText = "未ロード"
         )
 
         Spacer(modifier = Modifier.height(Spacing.md))
-        SectionLabel(text = "Model path:")
+        Text(
+            text = "比較モデル",
+            style = MaterialTheme.typography.bodyMedium,
+            color = TextSecondary
+        )
+        Spacer(modifier = Modifier.height(Spacing.sm))
+        uiState.availableLlmOptions.forEach { option ->
+            LlmOptionCard(
+                option = option,
+                isSelected = option.id == uiState.selectedLlmId,
+                isLoaded = option.id == uiState.loadedLlmId,
+                onSelect = { viewModel.selectLlmModel(option.id) }
+            )
+            Spacer(modifier = Modifier.height(Spacing.sm))
+        }
+
+        Text(
+            text = "4GB 端末を前提に、モデル切替時は先にロード済みモデルを解放します。会話履歴も切り替え時にリセットされます。",
+            style = MaterialTheme.typography.bodySmall,
+            color = TextTertiary
+        )
+
+        Spacer(modifier = Modifier.height(Spacing.md))
+        SectionLabel(text = "選択中のモデルパス")
         Spacer(modifier = Modifier.height(Spacing.xs))
-        MonoBlock(text = uiState.llmModelPath)
+        MonoBlock(text = selectedLlm?.modelPath ?: uiState.llmModelPath)
+
+        selectedLlm?.implementationNote?.let { note ->
+            Spacer(modifier = Modifier.height(Spacing.sm))
+            Text(
+                text = note,
+                style = MaterialTheme.typography.bodySmall,
+                color = TextSecondary
+            )
+        }
 
         uiState.lastError?.let { error ->
             Spacer(modifier = Modifier.height(Spacing.sm))
-            ErrorBlock(text = "Error: $error")
+            ErrorBlock(text = error)
         }
 
         Spacer(modifier = Modifier.height(Spacing.md))
-        Button(
-            onClick = { viewModel.loadLlmModel() },
-            enabled = !uiState.isProcessing,
+        Row(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(Radius.md),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = AccentPrimary,
-                contentColor = AccentOnPrimary
-            )
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
         ) {
-            Text(if (uiState.isProcessing) "Loading…" else "Reload Gemma 4 E2B")
+            Button(
+                onClick = { viewModel.loadLlmModel() },
+                enabled = !uiState.isProcessing && (selectedLlm?.isLoadable == true),
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(Radius.md),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = AccentPrimary,
+                    contentColor = AccentOnPrimary
+                )
+            ) {
+                Text(
+                    when {
+                        uiState.isProcessing -> "読み込み中…"
+                        uiState.llmReady && loadedLlm?.id == selectedLlm?.id -> "読み込み直す"
+                        else -> "選択中モデルを読み込む"
+                    }
+                )
+            }
+
+            OutlinedButton(
+                onClick = { viewModel.releaseLlmModel() },
+                enabled = uiState.llmReady && !uiState.isProcessing,
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(Radius.md),
+                border = BorderStroke(Sizes.hairline, DividerStrong),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary)
+            ) {
+                Text("モデルを解放")
+            }
+        }
+
+        if (loadedLlm != null && selectedLlm != null && loadedLlm.id != selectedLlm.id) {
+            Spacer(modifier = Modifier.height(Spacing.sm))
+            Text(
+                text = "現在ロード中: ${loadedLlm.displayName} / 切替先: ${selectedLlm.displayName}",
+                style = MaterialTheme.typography.bodySmall,
+                color = TextSecondary
+            )
+        }
+
+        if (uiState.llmRuntimeInfo.isNotBlank()) {
+            Spacer(modifier = Modifier.height(Spacing.md))
+            SectionLabel(text = "ランタイム情報")
+            Spacer(modifier = Modifier.height(Spacing.xs))
+            MonoBlock(text = uiState.llmRuntimeInfo.trim())
+        }
+
+        if (uiState.llmReady) {
+            Spacer(modifier = Modifier.height(Spacing.md))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
+            ) {
+                OutlinedButton(
+                    onClick = { viewModel.runLlmBenchmark() },
+                    enabled = !uiState.isProcessing && !uiState.isRunningBenchmark,
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(Radius.md),
+                    border = BorderStroke(Sizes.hairline, DividerStrong),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary)
+                ) {
+                    Text(if (uiState.isRunningBenchmark) "速度計測中…" else "速度ベンチを実行")
+                }
+            }
+        }
+
+        uiState.llmBenchmarkResult?.let { benchmark ->
+            Spacer(modifier = Modifier.height(Spacing.md))
+            SectionLabel(text = "速度結果")
+            Spacer(modifier = Modifier.height(Spacing.xs))
+            MonoBlock(text = benchmark.trim())
         }
 
         SectionDivider()
 
-        SectionLabel(text = "ASR ENGINE")
+        SectionLabel(text = "ローカル ASR")
         Spacer(modifier = Modifier.height(Spacing.sm))
         Text(
-            text = "ASR Engine",
+            text = "文字起こしモデル",
             style = MaterialTheme.typography.titleMedium,
             color = TextPrimary
         )
@@ -105,12 +208,12 @@ fun SettingsScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
         Spacer(modifier = Modifier.height(Spacing.sm))
         StatusRow(
             ready = uiState.asrDebugState.isReady,
-            readyText = "Sherpa-ONNX SenseVoice — ready",
-            notReadyText = "Sherpa-ONNX SenseVoice — not loaded"
+            readyText = "Sherpa-ONNX SenseVoice をロード中",
+            notReadyText = "Sherpa-ONNX SenseVoice は未ロード"
         )
 
         Spacer(modifier = Modifier.height(Spacing.md))
-        SectionLabel(text = "Model directory:")
+        SectionLabel(text = "モデルディレクトリ")
         Spacer(modifier = Modifier.height(Spacing.xs))
         MonoBlock(text = uiState.asrDebugState.modelDirPath)
 
@@ -134,12 +237,12 @@ fun SettingsScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
                 contentColor = AccentOnPrimary
             )
         ) {
-            Text(if (uiState.asrDebugState.isLoadingModel) "Loading…" else "Reload Sherpa-ONNX ASR")
+            Text(if (uiState.asrDebugState.isLoadingModel) "読み込み中…" else "Sherpa-ONNX ASR を読み込む")
         }
 
         Spacer(modifier = Modifier.height(Spacing.md))
         Text(
-            text = "Place these files in the directory above:\n- model.int8.onnx\n- tokens.txt\n\nThe app auto-detects known SenseVoice folders under `files/asr/` if the files exist there.\nIf files were pushed from `adb shell` into a shell-owned folder, also run:",
+            text = "上のディレクトリに次の 2 ファイルを配置してください。\n- model.int8.onnx\n- tokens.txt\n\n`files/asr/` 配下の既知 SenseVoice フォルダは自動検出します。`adb shell` で shell 所有フォルダに転送した場合は、次も実行してください。",
             style = MaterialTheme.typography.bodyMedium,
             color = TextSecondary
         )
@@ -151,27 +254,27 @@ fun SettingsScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
 
         SectionDivider()
 
-        SectionLabel(text = "MODEL FILE LOCATION")
+        SectionLabel(text = "モデル配置")
         Spacer(modifier = Modifier.height(Spacing.sm))
         Text(
-            text = "Model file location",
+            text = "ADB 配置コマンド",
             style = MaterialTheme.typography.titleMedium,
             color = TextPrimary
         )
         Spacer(modifier = Modifier.height(Spacing.sm))
         Text(
-            text = "Push the model file via adb:",
+            text = "LLM モデルを配置する場合:",
             style = MaterialTheme.typography.bodyMedium,
             color = TextSecondary
         )
         Spacer(modifier = Modifier.height(Spacing.sm))
         MonoBlock(
-            text = "adb push gemma-4-E2B-it.litertlm \\\n  ${uiState.llmModelPath}"
+            text = "adb push $selectedLlmFileName \\\n  ${selectedLlm?.modelPath ?: uiState.llmModelPath}"
         )
 
         Spacer(modifier = Modifier.height(Spacing.md))
         Text(
-            text = "Push Sherpa-ONNX SenseVoice files via adb:",
+            text = "Sherpa-ONNX SenseVoice を配置する場合:",
             style = MaterialTheme.typography.bodyMedium,
             color = TextSecondary
         )
@@ -183,19 +286,80 @@ fun SettingsScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
 
         SectionDivider()
 
-        SectionLabel(text = "DATA")
+        SectionLabel(text = "データ")
         Spacer(modifier = Modifier.height(Spacing.sm))
         Text(
-            text = "Data",
+            text = "保存方針",
             style = MaterialTheme.typography.titleMedium,
             color = TextPrimary
         )
         Spacer(modifier = Modifier.height(Spacing.sm))
         Text(
-            text = "All data is stored locally. No network access.",
+            text = "音声、文字起こし、要約結果は端末内にのみ保存します。クラウド送信は行いません。",
             style = MaterialTheme.typography.bodyMedium,
             color = TextSecondary
         )
+    }
+}
+
+@Composable
+private fun LlmOptionCard(
+    option: LlmModelOption,
+    isSelected: Boolean,
+    isLoaded: Boolean,
+    onSelect: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(Radius.md))
+            .background(if (isSelected) SurfaceMuted else SurfaceSubtle)
+            .clickable(onClick = onSelect)
+            .padding(Spacing.md)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = option.displayName,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = TextPrimary
+                )
+                Spacer(modifier = Modifier.height(Spacing.xs))
+                Text(
+                    text = "${option.providerLabel} / ${option.runtimeLabel}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextTertiary
+                )
+            }
+            StatusRow(
+                ready = isLoaded,
+                readyText = "使用中",
+                notReadyText = if (option.isLoadable) "待機中" else "準備中"
+            )
+        }
+
+        Spacer(modifier = Modifier.height(Spacing.sm))
+        Text(
+            text = option.description,
+            style = MaterialTheme.typography.bodySmall,
+            color = TextSecondary
+        )
+
+        Spacer(modifier = Modifier.height(Spacing.sm))
+        MonoBlock(text = option.modelPath)
+
+        if (!option.isLoadable && option.implementationNote != null) {
+            Spacer(modifier = Modifier.height(Spacing.sm))
+            Text(
+                text = option.implementationNote,
+                style = MaterialTheme.typography.bodySmall,
+                color = TextTertiary
+            )
+        }
     }
 }
 
