@@ -13,6 +13,44 @@ Current implementation status and restart notes are tracked in:
 - `docs/session-log.md`
 - `docs/asr-plan.md`
 
+## UI Design (2026-05-04)
+
+Applied Notion-style modern design system to the app:
+
+### Design System
+- **Color palette**: Monochrome with semantic tokens (`Sidebar*`, `Surface*`, `Text*`, `Divider*`, `Status*`)
+- **Typography**: Tight line heights and letter spacing for a clean, modern look
+- **Spacing & Radius**: Semantic constants (`Spacing.*`, `Radius.*`, `Sizes.*`) for consistency
+- **Dynamic color**: Disabled in favor of a consistent design language
+
+### UI Components
+- **Navigation**: 64dp black icon-only sidebar with rounded selection highlight (located at left edge)
+- **App Shell**: Custom `XtrustSidebar` with primary items (Home, Chat) and secondary items (Settings) pinned at bottom
+- **Lists**: Hairline-divided Notion-style lists (no card borders; structure via whitespace and dividers)
+- **Buttons**: Rounded primary buttons with `AccentPrimary` (dark); outlined buttons with hairline borders
+- **Cards & Status**: Subtle background colors with muted dividers; status indicators using color dots (red for recording, green for ready)
+
+### Screens
+- **HomeScreen (AI議事録)**: 
+  - Recording control with status indicator
+  - Utterance list with time badges and metadata
+  - Minutes list with item counts and chevrons
+  - Detail drawer for session inspection
+- **ChatScreen**: 
+  - User bubbles in dark (`AccentPrimary`) background
+  - Assistant bubbles in subtle gray
+  - Outlined text input with hairline border
+- **SettingsScreen**: 
+  - Semantic sections with small uppercase labels
+  - Monospace code blocks for paths and commands
+  - Status indicators (green dot = ready, gray = not ready)
+
+### Implementation Notes
+- All hardcoded colors and dimensions replaced with theme tokens
+- Material 3 components retained but restyled (colors, shapes, elevation adjusted)
+- Composable structure and state management unchanged; styling-only refactor
+- Build verified: `./gradlew assembleDebug` successful
+
 ## Goal
 
 Build a local-first Android app for strict-security sites where audio,

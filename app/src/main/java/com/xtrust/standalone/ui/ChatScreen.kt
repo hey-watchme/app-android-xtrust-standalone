@@ -1,5 +1,6 @@
 package com.xtrust.standalone.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,12 +18,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -34,8 +36,21 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.xtrust.standalone.ui.theme.AccentOnPrimary
+import com.xtrust.standalone.ui.theme.AccentPrimary
+import com.xtrust.standalone.ui.theme.DividerStrong
+import com.xtrust.standalone.ui.theme.Radius
+import com.xtrust.standalone.ui.theme.Sizes
+import com.xtrust.standalone.ui.theme.Spacing
+import com.xtrust.standalone.ui.theme.StatusError
+import com.xtrust.standalone.ui.theme.StatusReady
+import com.xtrust.standalone.ui.theme.SurfaceBackground
+import com.xtrust.standalone.ui.theme.SurfaceMuted
+import com.xtrust.standalone.ui.theme.SurfaceSubtle
+import com.xtrust.standalone.ui.theme.TextPrimary
+import com.xtrust.standalone.ui.theme.TextSecondary
+import com.xtrust.standalone.ui.theme.TextTertiary
 
 @Composable
 fun ChatScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
@@ -54,25 +69,30 @@ fun ChatScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
     Column(
         modifier = modifier
             .fillMaxSize()
-            .padding(16.dp)
+            .background(SurfaceBackground)
+            .padding(Spacing.xl)
     ) {
         Text(
             text = "Local chat",
-            style = MaterialTheme.typography.headlineSmall
+            style = MaterialTheme.typography.headlineSmall,
+            color = TextPrimary
         )
+        Spacer(modifier = Modifier.height(Spacing.xs))
         Text(
             text = "Use this screen for multi-turn Gemma testing. Audio capture and Sherpa-ONNX monitoring stay on Home.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 6.dp, bottom = 16.dp)
+            style = MaterialTheme.typography.bodySmall,
+            color = TextTertiary
         )
+        Spacer(modifier = Modifier.height(Spacing.lg))
+        HorizontalDivider(color = DividerStrong, thickness = Sizes.hairline)
+        Spacer(modifier = Modifier.height(Spacing.lg))
 
         LazyColumn(
             state = listState,
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f),
-            contentPadding = PaddingValues(bottom = 16.dp)
+            contentPadding = PaddingValues(bottom = Spacing.lg)
         ) {
             item {
                 ChatStatusCard(
@@ -82,7 +102,7 @@ fun ChatScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
             }
 
             item {
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(Spacing.md))
             }
 
             if (messages.isEmpty()) {
@@ -92,7 +112,7 @@ fun ChatScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
             } else {
                 items(messages, key = { it.id }) { message ->
                     ChatBubble(message = message)
-                    Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(Spacing.md))
                 }
             }
 
@@ -107,8 +127,8 @@ fun ChatScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
             Text(
                 text = error,
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.padding(bottom = 12.dp)
+                color = StatusError,
+                modifier = Modifier.padding(bottom = Spacing.md)
             )
         }
 
@@ -119,20 +139,33 @@ fun ChatScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
             enabled = uiState.llmReady && !uiState.isProcessing,
             minLines = 3,
             maxLines = 6,
+            shape = RoundedCornerShape(Radius.md),
             label = { Text("Message") },
-            placeholder = { Text("日本語で質問や指示を入力") }
+            placeholder = { Text("日本語で質問や指示を入力") },
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = AccentPrimary,
+                unfocusedBorderColor = DividerStrong,
+                focusedLabelColor = TextSecondary,
+                unfocusedLabelColor = TextTertiary,
+                cursorColor = AccentPrimary,
+                focusedTextColor = TextPrimary,
+                unfocusedTextColor = TextPrimary
+            )
         )
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(Spacing.sm))
 
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
         ) {
             OutlinedButton(
                 onClick = { draft = "" },
                 enabled = draft.isNotEmpty() && !uiState.isProcessing,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(Radius.md),
+                border = BorderStroke(Sizes.hairline, DividerStrong),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary)
             ) {
                 Text("Clear")
             }
@@ -143,7 +176,12 @@ fun ChatScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
                     draft = ""
                 },
                 enabled = uiState.llmReady && !uiState.isProcessing && draft.isNotBlank(),
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(Radius.md),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = AccentPrimary,
+                    contentColor = AccentOnPrimary
+                )
             ) {
                 Text("Send")
             }
@@ -154,53 +192,58 @@ fun ChatScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
 @Composable
 private fun ChatStatusCard(uiState: UiState, onResetChat: () -> Unit) {
     val memory = uiState.memorySnapshot
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(Radius.lg))
+            .background(SurfaceMuted)
+            .padding(Spacing.lg)
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+        Text(
+            text = if (uiState.llmReady) "Gemma 4 E2B ready" else "Gemma 4 E2B not loaded",
+            style = MaterialTheme.typography.titleSmall,
+            color = if (uiState.llmReady) StatusReady else StatusError
+        )
+        Spacer(modifier = Modifier.height(Spacing.xs))
+        Text(
+            text = "Device RAM ${memory.deviceUsedMb} / ${memory.deviceTotalMb} MB used",
+            style = MaterialTheme.typography.labelSmall,
+            color = TextSecondary
+        )
+        Spacer(modifier = Modifier.height(Spacing.xs))
+        Text(
+            text = "App heap ${memory.appHeapUsedMb} / ${memory.appHeapMaxMb} MB",
+            style = MaterialTheme.typography.labelSmall,
+            color = TextSecondary
+        )
+        Spacer(modifier = Modifier.height(Spacing.xs))
+        Text(
+            text = "Native heap ${memory.nativeHeapMb} MB  Available ${memory.deviceAvailableMb} MB",
+            style = MaterialTheme.typography.labelSmall,
+            color = TextSecondary
+        )
+        if (memory.lowMemory) {
+            Spacer(modifier = Modifier.height(Spacing.xs))
             Text(
-                text = if (uiState.llmReady) "Gemma 4 E2B ready" else "Gemma 4 E2B not loaded",
-                style = MaterialTheme.typography.titleMedium,
-                color = if (uiState.llmReady) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                text = "System low-memory signal detected",
+                style = MaterialTheme.typography.labelSmall,
+                color = StatusError
             )
-            Text(
-                text = "Device RAM ${memory.deviceUsedMb} / ${memory.deviceTotalMb} MB used",
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(top = 8.dp)
-            )
-            Text(
-                text = "App heap ${memory.appHeapUsedMb} / ${memory.appHeapMaxMb} MB",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 4.dp)
-            )
-            Text(
-                text = "Native heap ${memory.nativeHeapMb} MB  Available ${memory.deviceAvailableMb} MB",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 2.dp)
-            )
-            if (memory.lowMemory) {
-                Text(
-                    text = "System low-memory signal detected",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(top = 6.dp)
-                )
-            }
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 12.dp),
-                horizontalArrangement = Arrangement.End
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = Spacing.md),
+            horizontalArrangement = Arrangement.End
+        ) {
+            OutlinedButton(
+                onClick = onResetChat,
+                enabled = uiState.llmReady && !uiState.isProcessing,
+                shape = RoundedCornerShape(Radius.md),
+                border = BorderStroke(Sizes.hairline, DividerStrong),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary)
             ) {
-                OutlinedButton(
-                    onClick = onResetChat,
-                    enabled = uiState.llmReady && !uiState.isProcessing
-                ) {
-                    Text("New chat")
-                }
+                Text("New chat")
             }
         }
     }
@@ -208,39 +251,54 @@ private fun ChatStatusCard(uiState: UiState, onResetChat: () -> Unit) {
 
 @Composable
 private fun EmptyChatState(llmReady: Boolean) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(Radius.lg))
+            .background(SurfaceMuted)
+            .padding(Spacing.lg),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                text = if (llmReady) "Start a local chat" else "Load the model first",
-                style = MaterialTheme.typography.titleMedium
-            )
-            Text(
-                text = if (llmReady) {
-                    "Use this screen to test multi-turn local chat on the device."
-                } else {
-                    "Open Settings if auto-load did not complete."
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 6.dp)
-            )
-        }
+        Text(
+            text = if (llmReady) "Start a local chat" else "Load the model first",
+            style = MaterialTheme.typography.titleMedium,
+            color = TextPrimary
+        )
+        Spacer(modifier = Modifier.height(Spacing.xs))
+        Text(
+            text = if (llmReady) {
+                "Use this screen to test multi-turn local chat on the device."
+            } else {
+                "Open Settings if auto-load did not complete."
+            },
+            style = MaterialTheme.typography.bodyMedium,
+            color = TextSecondary
+        )
     }
 }
 
 @Composable
 private fun ChatBubble(message: ChatMessage) {
     val isUser = message.role == ChatRole.User
-    val bubbleColor = if (isUser) {
-        MaterialTheme.colorScheme.primaryContainer
-    } else {
-        MaterialTheme.colorScheme.surfaceContainerHigh
-    }
+    val bubbleColor = if (isUser) AccentPrimary else SurfaceSubtle
+    val textColor = if (isUser) AccentOnPrimary else TextPrimary
     val alignment = if (isUser) Alignment.End else Alignment.Start
     val label = if (isUser) "You" else "Gemma"
+    val bubbleShape = if (isUser) {
+        RoundedCornerShape(
+            topStart = Radius.lg,
+            topEnd = Radius.lg,
+            bottomStart = Radius.lg,
+            bottomEnd = Radius.sm
+        )
+    } else {
+        RoundedCornerShape(
+            topStart = Radius.lg,
+            topEnd = Radius.lg,
+            bottomStart = Radius.sm,
+            bottomEnd = Radius.lg
+        )
+    }
 
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -249,19 +307,19 @@ private fun ChatBubble(message: ChatMessage) {
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(bottom = 4.dp)
+            color = TextTertiary,
+            modifier = Modifier.padding(bottom = Spacing.xs)
         )
         Box(
             modifier = Modifier
-                .clip(RoundedCornerShape(20.dp))
+                .clip(bubbleShape)
                 .background(bubbleColor)
-                .padding(horizontal = 14.dp, vertical = 10.dp)
+                .padding(horizontal = Spacing.md, vertical = Spacing.md)
         ) {
             Text(
                 text = message.text,
-                style = MaterialTheme.typography.bodyMedium
+                style = MaterialTheme.typography.bodyMedium,
+                color = textColor
             )
         }
     }
@@ -269,6 +327,12 @@ private fun ChatBubble(message: ChatMessage) {
 
 @Composable
 private fun ThinkingBubble() {
+    val bubbleShape = RoundedCornerShape(
+        topStart = Radius.lg,
+        topEnd = Radius.lg,
+        bottomStart = Radius.sm,
+        bottomEnd = Radius.lg
+    )
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.Start
@@ -276,22 +340,26 @@ private fun ThinkingBubble() {
         Text(
             text = "Gemma",
             style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(bottom = 4.dp)
+            color = TextTertiary,
+            modifier = Modifier.padding(bottom = Spacing.xs)
         )
         Row(
             modifier = Modifier
-                .clip(RoundedCornerShape(20.dp))
-                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                .padding(horizontal = 14.dp, vertical = 10.dp),
+                .clip(bubbleShape)
+                .background(SurfaceSubtle)
+                .padding(horizontal = Spacing.md, vertical = Spacing.md),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
         ) {
-            CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
+            CircularProgressIndicator(
+                strokeWidth = 2.dp,
+                color = TextSecondary,
+                modifier = Modifier.size(16.dp)
+            )
             Text(
                 text = "Generating response...",
-                style = MaterialTheme.typography.bodyMedium
+                style = MaterialTheme.typography.bodyMedium,
+                color = TextSecondary
             )
         }
     }

@@ -21,11 +21,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowForwardIos
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material.icons.automirrored.outlined.Article
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -42,6 +43,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.platform.LocalContext
@@ -49,6 +51,21 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.xtrust.standalone.data.CardEntity
 import com.xtrust.standalone.data.RecordingSessionSummary
+import com.xtrust.standalone.ui.theme.AccentOnPrimary
+import com.xtrust.standalone.ui.theme.AccentPrimary
+import com.xtrust.standalone.ui.theme.DividerStrong
+import com.xtrust.standalone.ui.theme.DividerSubtle
+import com.xtrust.standalone.ui.theme.Radius
+import com.xtrust.standalone.ui.theme.Sizes
+import com.xtrust.standalone.ui.theme.Spacing
+import com.xtrust.standalone.ui.theme.StatusError
+import com.xtrust.standalone.ui.theme.StatusRecording
+import com.xtrust.standalone.ui.theme.SurfaceBackground
+import com.xtrust.standalone.ui.theme.SurfaceSelected
+import com.xtrust.standalone.ui.theme.SurfaceSubtle
+import com.xtrust.standalone.ui.theme.TextPrimary
+import com.xtrust.standalone.ui.theme.TextSecondary
+import com.xtrust.standalone.ui.theme.TextTertiary
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -83,19 +100,21 @@ fun HomeScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
     }
 
     Box(
-        modifier = modifier.fillMaxSize()
+        modifier = modifier
+            .fillMaxSize()
+            .background(SurfaceBackground)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(16.dp)
+                .padding(Spacing.xl)
         ) {
             uiState.lastError?.let { error ->
                 Text(
                     text = error,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(bottom = 12.dp)
+                    color = StatusError,
+                    modifier = Modifier.padding(bottom = Spacing.md)
                 )
             }
 
@@ -112,12 +131,12 @@ fun HomeScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
                 }
             )
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(Spacing.xl))
 
             Row(modifier = Modifier.fillMaxSize()) {
                 LazyColumn(
                     modifier = Modifier.weight(2f),
-                    contentPadding = PaddingValues(bottom = 16.dp)
+                    contentPadding = PaddingValues(bottom = Spacing.lg)
                 ) {
                     item {
                         UtterancesCard(
@@ -126,11 +145,11 @@ fun HomeScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
                     }
                 }
 
-                Spacer(modifier = Modifier.width(16.dp))
+                Spacer(modifier = Modifier.width(Spacing.xl))
 
                 LazyColumn(
                     modifier = Modifier.weight(1f),
-                    contentPadding = PaddingValues(bottom = 16.dp)
+                    contentPadding = PaddingValues(bottom = Spacing.lg)
                 ) {
                     item {
                         MinutesListCard(
@@ -146,7 +165,7 @@ fun HomeScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.18f))
+                    .background(Color.Black.copy(alpha = 0.12f))
                     .clickable { selectedSessionId = null }
             )
             MinutesDetailDrawer(
@@ -175,7 +194,11 @@ private fun VadDebugCard(
     vadState: VadDebugState,
     onToggleListening: () -> Unit
 ) {
-    Column {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = Spacing.lg)
+    ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -184,47 +207,62 @@ private fun VadDebugCard(
             Text(
                 text = "AI議事録",
                 style = MaterialTheme.typography.headlineSmall,
+                color = TextPrimary,
                 modifier = Modifier.weight(1f)
             )
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                horizontalArrangement = Arrangement.spacedBy(Spacing.md)
             ) {
-                Text(
-                    text = buildRecordingStatusText(
-                        isListening = vadState.isListening,
-                        isSpeechDetected = vadState.isSpeechDetected
-                    ),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (vadState.isListening) {
-                        Color(0xFF2E7D32)
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    }
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(Spacing.sm)
+                            .clip(CircleShape)
+                            .background(
+                                if (vadState.isListening) StatusRecording else TextTertiary
+                            )
+                    )
+                    Text(
+                        text = buildRecordingStatusText(
+                            isListening = vadState.isListening,
+                            isSpeechDetected = vadState.isSpeechDetected
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary
+                    )
+                }
                 Switch(
                     checked = vadState.isListening,
                     onCheckedChange = { onToggleListening() },
                     colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color.White,
-                        checkedTrackColor = Color(0xFF2E7D32),
+                        checkedThumbColor = AccentOnPrimary,
+                        checkedTrackColor = AccentPrimary,
                         uncheckedThumbColor = Color.White,
-                        uncheckedTrackColor = Color(0xFF9E9E9E)
+                        uncheckedTrackColor = SurfaceSelected
                     )
                 )
             }
         }
+        Spacer(modifier = Modifier.height(Spacing.md))
         Text(
-            text = "レベル ${vadState.rmsDb.roundToInt()} dBFS  開始 ${vadState.thresholdDb.roundToInt()} dBFS  継続 ${vadState.continueThresholdDb.roundToInt()} dBFS",
+            text = "レベル ${vadState.rmsDb.roundToInt()} dBFS  ・  開始 ${vadState.thresholdDb.roundToInt()} dBFS  ・  継続 ${vadState.continueThresholdDb.roundToInt()} dBFS",
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 12.dp)
+            color = TextTertiary
         )
         Text(
-            text = "検出 ${vadState.detectedSegments}  最終発話 ${vadState.lastSpeechDurationMs} ms  無音分割 ${vadState.pauseSplitMs} ms",
+            text = "検出 ${vadState.detectedSegments}  ・  最終発話 ${vadState.lastSpeechDurationMs} ms  ・  無音分割 ${vadState.pauseSplitMs} ms",
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 4.dp)
+            color = TextTertiary,
+            modifier = Modifier.padding(top = Spacing.xs)
+        )
+        Spacer(modifier = Modifier.height(Spacing.lg))
+        HorizontalDivider(
+            color = DividerStrong,
+            thickness = Sizes.hairline
         )
     }
 }
@@ -233,29 +271,30 @@ private fun VadDebugCard(
 private fun UtterancesCard(
     segments: List<AudioSegment>
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = "発言",
+            style = MaterialTheme.typography.labelSmall,
+            color = TextTertiary
+        )
+        Spacer(modifier = Modifier.height(Spacing.sm))
+        if (segments.isEmpty()) {
             Text(
-                text = "発言",
-                style = MaterialTheme.typography.titleMedium
+                text = "ただいま発言はありません。",
+                style = MaterialTheme.typography.bodyMedium,
+                color = TextTertiary,
+                modifier = Modifier.padding(vertical = Spacing.md)
             )
-            if (segments.isEmpty()) {
-                Text(
-                    text = "ただいま発言はありません。",
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(top = 8.dp)
-                )
-            } else {
-                Column(modifier = Modifier.padding(top = 10.dp)) {
-                    segments.forEachIndexed { index, segment ->
-                        if (index > 0) {
-                            Spacer(modifier = Modifier.height(12.dp))
-                        }
-                        UtteranceRow(segment = segment)
+        } else {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                segments.forEachIndexed { index, segment ->
+                    if (index > 0) {
+                        HorizontalDivider(
+                            color = DividerSubtle,
+                            thickness = Sizes.hairline
+                        )
                     }
+                    UtteranceRow(segment = segment)
                 }
             }
         }
@@ -267,32 +306,44 @@ private fun MinutesListCard(
     sessions: List<RecordingSessionSummary>,
     onSelectSession: (Long) -> Unit
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             Text(
-                text = "議事録一覧 ${sessions.size}件",
-                style = MaterialTheme.typography.titleMedium
+                text = "議事録一覧",
+                style = MaterialTheme.typography.labelSmall,
+                color = TextTertiary
             )
-            if (sessions.isEmpty()) {
-                Text(
-                    text = "保存済みの議事録はありません。",
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(top = 8.dp)
-                )
-            } else {
-                Column(modifier = Modifier.padding(top = 10.dp)) {
-                    sessions.forEachIndexed { index, summary ->
-                        if (index > 0) {
-                            Spacer(modifier = Modifier.height(10.dp))
-                        }
-                        MinutesRow(
-                            summary = summary,
-                            onClick = { onSelectSession(summary.session.id) }
+            Text(
+                text = "${sessions.size}",
+                style = MaterialTheme.typography.labelSmall,
+                color = TextTertiary
+            )
+        }
+        Spacer(modifier = Modifier.height(Spacing.sm))
+        if (sessions.isEmpty()) {
+            Text(
+                text = "保存済みの議事録はありません。",
+                style = MaterialTheme.typography.bodyMedium,
+                color = TextTertiary,
+                modifier = Modifier.padding(vertical = Spacing.md)
+            )
+        } else {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                sessions.forEachIndexed { index, summary ->
+                    if (index > 0) {
+                        HorizontalDivider(
+                            color = DividerSubtle,
+                            thickness = Sizes.hairline
                         )
                     }
+                    MinutesRow(
+                        summary = summary,
+                        onClick = { onSelectSession(summary.session.id) }
+                    )
                 }
             }
         }
@@ -317,32 +368,41 @@ private fun MinutesRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+            .clip(RoundedCornerShape(Radius.md))
+            .clickable(onClick = onClick)
+            .padding(horizontal = Spacing.sm, vertical = Spacing.md),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.md),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        Icon(
+            imageVector = Icons.AutoMirrored.Outlined.Article,
+            contentDescription = null,
+            tint = TextTertiary,
+            modifier = Modifier.size(Spacing.lg)
+        )
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = summary.session.title,
-                style = MaterialTheme.typography.bodyMedium
+                style = MaterialTheme.typography.bodyMedium,
+                color = TextPrimary
             )
             Text(
-                text = "$started -> $ended",
+                text = "$started → $ended",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 2.dp)
+                color = TextTertiary,
+                modifier = Modifier.padding(top = Spacing.xxs)
             )
             Text(
-                text = "発言 ${summary.segmentCount}件  文字起こし ${summary.transcribedCount}件  状態 ${buildSessionStatusText(summary.session.status)}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 2.dp)
+                text = "発言 ${summary.segmentCount}  ・  文字起こし ${summary.transcribedCount}  ・  ${buildSessionStatusText(summary.session.status)}",
+                style = MaterialTheme.typography.labelSmall,
+                color = TextTertiary,
+                modifier = Modifier.padding(top = Spacing.xxs)
             )
         }
         Icon(
-            imageVector = Icons.AutoMirrored.Filled.ArrowForwardIos,
+            imageVector = Icons.AutoMirrored.Outlined.KeyboardArrowRight,
             contentDescription = "議事録を開く",
-            tint = MaterialTheme.colorScheme.onSurfaceVariant
+            tint = TextTertiary
         )
     }
 }
@@ -378,80 +438,106 @@ private fun MinutesDetailDrawer(
         modifier = modifier
             .fillMaxHeight()
             .fillMaxWidth(0.66f),
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 8.dp,
-        shadowElevation = 8.dp
+        color = SurfaceBackground,
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp
     ) {
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(20.dp)
-        ) {
-            item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = summary.session.title,
-                        style = MaterialTheme.typography.titleLarge,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = "閉じる",
-                        modifier = Modifier
-                            .size(24.dp)
-                            .clickable(onClick = onClose)
-                    )
-                }
-                HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
-                Text(
-                    text = "開始: $started  /  終了: $ended",
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(top = 4.dp)
+        Row(modifier = Modifier.fillMaxSize()) {
+            // Left hairline divider for the slide-in panel
+            Box(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .width(Sizes.hairline)
+                    .background(DividerStrong)
+            )
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(
+                    horizontal = Spacing.xl,
+                    vertical = Spacing.xl
                 )
-                Text(
-                    text = "状態: ${buildSessionStatusText(summary.session.status)}  /  発言数: ${summary.segmentCount}件  /  文字起こし済み: ${summary.transcribedCount}件",
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(top = 6.dp)
-                )
-                summary.session.errorMessage?.takeIf { it.isNotBlank() }?.let { errorMessage ->
-                    Text(
-                        text = errorMessage,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(top = 8.dp)
-                    )
-                }
-                Text(
-                    text = "ID: ${summary.session.id}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 12.dp)
-                )
-            }
-            if (cards.isEmpty()) {
+            ) {
                 item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = summary.session.title,
+                            style = MaterialTheme.typography.headlineSmall,
+                            color = TextPrimary,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Icon(
+                            imageVector = Icons.Outlined.Close,
+                            contentDescription = "閉じる",
+                            tint = TextSecondary,
+                            modifier = Modifier
+                                .size(Spacing.lg)
+                                .clickable(onClick = onClose)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(Spacing.lg))
+                    HorizontalDivider(color = DividerStrong, thickness = Sizes.hairline)
+                    Spacer(modifier = Modifier.height(Spacing.md))
                     Text(
-                        text = "この議事録にはまだ発言がありません。",
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(top = 10.dp)
+                        text = "開始  $started",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary
+                    )
+                    Text(
+                        text = "終了  $ended",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary,
+                        modifier = Modifier.padding(top = Spacing.xxs)
+                    )
+                    Text(
+                        text = "状態  ${buildSessionStatusText(summary.session.status)}  ・  発言 ${summary.segmentCount}  ・  文字起こし ${summary.transcribedCount}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary,
+                        modifier = Modifier.padding(top = Spacing.xxs)
+                    )
+                    summary.session.errorMessage?.takeIf { it.isNotBlank() }?.let { errorMessage ->
+                        Text(
+                            text = errorMessage,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = StatusError,
+                            modifier = Modifier.padding(top = Spacing.sm)
+                        )
+                    }
+                    Text(
+                        text = "ID  ${summary.session.id}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextTertiary,
+                        modifier = Modifier.padding(top = Spacing.md)
+                    )
+                    Spacer(modifier = Modifier.height(Spacing.md))
+                    HorizontalDivider(color = DividerStrong, thickness = Sizes.hairline)
+                }
+                if (cards.isEmpty()) {
+                    item {
+                        Text(
+                            text = "この議事録にはまだ発言がありません。",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = TextTertiary,
+                            modifier = Modifier.padding(top = Spacing.md)
+                        )
+                    }
+                } else {
+                    items(cards) { card ->
+                        MinutesDrawerUtteranceRow(card = card)
+                        HorizontalDivider(color = DividerSubtle, thickness = Sizes.hairline)
+                    }
+                }
+                item {
+                    Spacer(modifier = Modifier.height(Spacing.lg))
+                    Text(
+                        text = "今後はこの発言一覧をもとに、ローカル LLM で要約や整理を行います。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextTertiary
                     )
                 }
-            } else {
-                items(cards) { card ->
-                    Spacer(modifier = Modifier.height(12.dp))
-                    MinutesDrawerUtteranceRow(card = card)
-                }
-            }
-            item {
-                HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
-                Text(
-                    text = "今後はこの発言一覧をもとに、ローカル LLM で要約や整理を行います。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
             }
         }
     }
@@ -463,23 +549,28 @@ private fun MinutesDrawerUtteranceRow(card: CardEntity) {
         SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(card.recordedAt))
     }
     val metaText = remember(card.durationMs, card.transcriptionMs) {
-        "長さ ${card.durationMs} ms / 文字起こし ${card.transcriptionMs?.let { "${it} ms" } ?: "待機中"}"
+        "長さ ${card.durationMs} ms  ・  文字起こし ${card.transcriptionMs?.let { "${it} ms" } ?: "待機中"}"
     }
 
-    Column(modifier = Modifier.fillMaxWidth()) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = Spacing.md)
+    ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.Bottom
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 text = timeText,
-                style = MaterialTheme.typography.bodyMedium
+                style = MaterialTheme.typography.labelMedium,
+                color = TextSecondary
             )
             Text(
-                text = "($metaText)",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                text = metaText,
+                style = MaterialTheme.typography.labelSmall,
+                color = TextTertiary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
@@ -487,7 +578,8 @@ private fun MinutesDrawerUtteranceRow(card: CardEntity) {
         Text(
             text = card.transcript?.takeIf { it.isNotBlank() } ?: "文字起こし待ちです。",
             style = MaterialTheme.typography.bodyLarge,
-            modifier = Modifier.padding(top = 8.dp)
+            color = TextPrimary,
+            modifier = Modifier.padding(top = Spacing.sm)
         )
     }
 }
@@ -498,63 +590,68 @@ private fun UtteranceRow(segment: AudioSegment) {
         SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(segment.createdAt))
     }
     val metaText = remember(segment.durationMs, segment.sizeBytes) {
-        "長さ ${segment.durationMs} ms / サイズ ${segment.sizeBytes / 1024} KB"
+        "長さ ${segment.durationMs} ms  ・  サイズ ${segment.sizeBytes / 1024} KB"
     }
-    Column(modifier = Modifier.fillMaxWidth()) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = Spacing.md)
+    ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.Bottom
-                ) {
-                    Text(
-                        text = timeText,
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Text(
-                        text = "($metaText)",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(Radius.sm))
+                    .background(SurfaceSubtle)
+                    .padding(horizontal = Spacing.sm, vertical = Spacing.xs)
+            ) {
+                Text(
+                    text = timeText,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextSecondary
+                )
             }
+            Text(
+                text = metaText,
+                style = MaterialTheme.typography.labelSmall,
+                color = TextTertiary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
             if (segment.isTranscribing) {
                 Text(
-                    text = "文字起こし中...",
+                    text = "文字起こし中…",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(start = 8.dp)
+                    color = TextTertiary
                 )
             }
         }
         segment.transcript?.let { transcript ->
             Text(
                 text = transcript,
-                style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.padding(top = 8.dp)
+                style = MaterialTheme.typography.bodyMedium,
+                color = TextPrimary,
+                modifier = Modifier.padding(top = Spacing.sm)
             )
         }
         segment.transcriptionMs?.let { duration ->
             Text(
-                text = "文字起こし ${duration} ms  RTF ${segment.realTimeFactor?.let { "%.2f".format(it) } ?: "-"}",
+                text = "文字起こし ${duration} ms  ・  RTF ${segment.realTimeFactor?.let { "%.2f".format(it) } ?: "-"}",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 6.dp)
+                color = TextTertiary,
+                modifier = Modifier.padding(top = Spacing.xs)
             )
         }
         segment.asrError?.let { error ->
             Text(
                 text = error,
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.padding(top = 6.dp)
+                color = StatusError,
+                modifier = Modifier.padding(top = Spacing.xs)
             )
         }
     }

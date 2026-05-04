@@ -5,32 +5,28 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Chat
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.Icon
-import androidx.compose.material3.NavigationRail
-import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.GraphicEq
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.VerticalDivider
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.unit.dp
 import com.xtrust.standalone.ui.ChatScreen
 import com.xtrust.standalone.ui.HomeScreen
 import com.xtrust.standalone.ui.SettingsScreen
+import com.xtrust.standalone.ui.SidebarItem
+import com.xtrust.standalone.ui.XtrustShell
 import com.xtrust.standalone.ui.XtrustViewModel
+import com.xtrust.standalone.ui.theme.SurfaceBackground
 import com.xtrust.standalone.ui.theme.XtrustTheme
 
 class MainActivity : ComponentActivity() {
@@ -42,54 +38,28 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             XtrustTheme {
-                var selectedDestination by rememberSaveable { mutableStateOf(AppDestination.Home) }
+                var selectedKey by rememberSaveable { mutableStateOf(KEY_HOME) }
 
                 Scaffold(
                     modifier = Modifier.fillMaxSize(),
                     contentWindowInsets = WindowInsets(0, 0, 0, 0)
                 ) { innerPadding ->
-                    Row(
+                    Box(
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(innerPadding)
+                            .background(SurfaceBackground)
                     ) {
-                        NavigationRail {
-                            AppDestination.primaryItems.forEach { destination ->
-                                NavigationRailItem(
-                                    selected = selectedDestination == destination,
-                                    onClick = { selectedDestination = destination },
-                                    icon = {
-                                        Icon(
-                                            imageVector = destination.icon,
-                                            contentDescription = destination.label
-                                        )
-                                    },
-                                    label = { Text(destination.label) }
-                                )
-                            }
-
-                            Box(modifier = Modifier.weight(1f))
-
-                            NavigationRailItem(
-                                selected = selectedDestination == AppDestination.Settings,
-                                onClick = { selectedDestination = AppDestination.Settings },
-                                icon = {
-                                    Icon(
-                                        imageVector = AppDestination.Settings.icon,
-                                        contentDescription = AppDestination.Settings.label
-                                    )
-                                },
-                                label = { Text(AppDestination.Settings.label) }
-                            )
-                        }
-
-                        VerticalDivider(thickness = 1.dp)
-
-                        Box(modifier = Modifier.fillMaxSize()) {
-                            when (selectedDestination) {
-                                AppDestination.Home -> HomeScreen(viewModel, Modifier.fillMaxSize())
-                                AppDestination.Chat -> ChatScreen(viewModel, Modifier.fillMaxSize())
-                                AppDestination.Settings -> SettingsScreen(viewModel, Modifier.fillMaxSize())
+                        XtrustShell(
+                            primary = primaryItems,
+                            secondary = secondaryItems,
+                            selectedKey = selectedKey,
+                            onSelect = { selectedKey = it }
+                        ) {
+                            when (selectedKey) {
+                                KEY_HOME -> HomeScreen(viewModel, Modifier.fillMaxSize())
+                                KEY_CHAT -> ChatScreen(viewModel, Modifier.fillMaxSize())
+                                KEY_SETTINGS -> SettingsScreen(viewModel, Modifier.fillMaxSize())
                             }
                         }
                     }
@@ -97,17 +67,19 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-}
-
-private enum class AppDestination(
-    val label: String,
-    val icon: ImageVector
-) {
-    Home("ホーム", Icons.Default.Home),
-    Chat("チャット", Icons.AutoMirrored.Filled.Chat),
-    Settings("設定", Icons.Default.Settings);
 
     companion object {
-        val primaryItems = listOf(Home, Chat)
+        private const val KEY_HOME = "home"
+        private const val KEY_CHAT = "chat"
+        private const val KEY_SETTINGS = "settings"
+
+        private val primaryItems = listOf(
+            SidebarItem(KEY_HOME, "AI議事録", Icons.Outlined.GraphicEq),
+            SidebarItem(KEY_CHAT, "チャット", Icons.Outlined.ChatBubbleOutline)
+        )
+
+        private val secondaryItems = listOf(
+            SidebarItem(KEY_SETTINGS, "設定", Icons.Outlined.Settings)
+        )
     }
 }
