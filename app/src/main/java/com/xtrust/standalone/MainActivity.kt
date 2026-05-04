@@ -3,18 +3,14 @@ package com.xtrust.standalone
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.GraphicEq
 import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -35,32 +31,25 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
         setContent {
             XtrustTheme {
                 var selectedKey by rememberSaveable { mutableStateOf(KEY_HOME) }
 
-                Scaffold(
-                    modifier = Modifier.fillMaxSize(),
-                    contentWindowInsets = WindowInsets(0, 0, 0, 0)
-                ) { innerPadding ->
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(innerPadding)
-                            .background(SurfaceBackground)
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(SurfaceBackground)
+                ) {
+                    XtrustShell(
+                        primary = primaryItems,
+                        secondary = secondaryItems,
+                        selectedKey = selectedKey,
+                        onSelect = { selectedKey = it }
                     ) {
-                        XtrustShell(
-                            primary = primaryItems,
-                            secondary = secondaryItems,
-                            selectedKey = selectedKey,
-                            onSelect = { selectedKey = it }
-                        ) {
-                            when (selectedKey) {
-                                KEY_HOME -> HomeScreen(viewModel, Modifier.fillMaxSize())
-                                KEY_CHAT -> ChatScreen(viewModel, Modifier.fillMaxSize())
-                                KEY_SETTINGS -> SettingsScreen(viewModel, Modifier.fillMaxSize())
-                            }
+                        when (selectedKey) {
+                            KEY_HOME -> HomeScreen(viewModel, Modifier.fillMaxSize())
+                            KEY_CHAT -> ChatScreen(viewModel, Modifier.fillMaxSize())
+                            KEY_SETTINGS -> SettingsScreen(viewModel, Modifier.fillMaxSize())
                         }
                     }
                 }

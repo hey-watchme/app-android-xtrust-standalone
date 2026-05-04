@@ -7,7 +7,9 @@ import java.io.IOException;
 
 public final class BonsaiNativeBridge implements AutoCloseable {
     private static final String DEFAULT_SYSTEM_PROMPT =
-            "You are a concise assistant. Reply in the same language as the user.";
+            "You are a concise assistant. Reply in the same language as the user. " +
+                    "Do not output <think> tags, hidden reasoning, or XML-style control tags. " +
+                    "Answer directly and briefly.";
 
     static {
         System.loadLibrary("bonsai-runtime");

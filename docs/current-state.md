@@ -1,17 +1,18 @@
 # Android Standalone — 現在地と次マイルストーン
 
-最終更新: 2026-05-04
+最終更新: 2026-05-05
 
 ## 現在できること
 
 - `INTERNET` 権限なしで起動する
-- `Gemma 4 E2B` を端末ローカルでロードして会話する
+- `Gemma 4 E2B` / `Bonsai 8B (GGUF)` を端末ローカルでロードして会話する（build flavor で分離）
 - マイク入力をローカル `VAD` で監視する
 - 発話区間を `wav` に切り出して端末内へ保存する
 - 保存された `wav` を `sherpa-onnx SenseVoice` でローカル文字起こしする
 - 新しいセグメントは自動で ASR に流れる
 - `Start VAD` から `Stop VAD` までを 1 セッションとしてローカル DB に保存する
 - セッションごとのセグメント件数と文字起こし件数を Home で確認する
+- チャットをスレッド型で保存し、アプリ再起動後に復元して再開できる
 
 ## 今の設計判断
 
@@ -74,6 +75,21 @@
 
 - LLM 要約結果
 - 現時点では手動要約の保存先
+
+### `chat_threads` / `chat_messages`
+
+- チャットスレッドとメッセージ保存
+- スレッド UI は「最後に更新された順」で並ぶ
+
+## 注意（flavor = 別アプリ）
+
+`gemma` と `bonsai` は `applicationIdSuffix` により別アプリ扱い。
+そのため次は共有されない（見えない）。
+
+- DB（録音/チャット/要約）
+- `files/models/`（LLM）
+- `files/asr/`（ASR）
+- `files/audio-segments/`（録音 wav）
 
 ## 既知の制約
 

@@ -8,8 +8,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 private const val DEFAULT_SYSTEM_PROMPT =
-    "You are a concise assistant. Reply in the same language as the user."
-private const val DEFAULT_GENERATE_TOKENS = 256
+    "You are a concise assistant. Reply in the same language as the user. " +
+        "Do not output <think> tags, hidden reasoning, or XML-style control tags. " +
+        "Answer directly and briefly."
+private const val DEFAULT_GENERATE_TOKENS = 320
 
 class BonsaiLlmEngine(
     private val application: Application
@@ -35,12 +37,12 @@ class BonsaiLlmEngine(
     override suspend fun generate(prompt: String): String = withContext(Dispatchers.IO) {
         val bridge = checkNotNull(runtime) { "Bonsai runtime not initialized" }
         bridge.resetConversation(DEFAULT_SYSTEM_PROMPT)
-        bridge.complete(prompt, DEFAULT_GENERATE_TOKENS)
+        sanitizeAssistantResponse(bridge.complete(prompt, DEFAULT_GENERATE_TOKENS))
     }
 
     override suspend fun sendChatMessage(message: String): String = withContext(Dispatchers.IO) {
         val bridge = checkNotNull(runtime) { "Bonsai runtime not initialized" }
-        bridge.complete(message, DEFAULT_GENERATE_TOKENS)
+        sanitizeAssistantResponse(bridge.complete(message, DEFAULT_GENERATE_TOKENS))
     }
 
     override fun resetChat() {
@@ -62,5 +64,19 @@ class BonsaiLlmEngine(
     override suspend fun benchmark(): String = withContext(Dispatchers.IO) {
         val bridge = checkNotNull(runtime) { "Bonsai runtime not initialized" }
         bridge.bench(256, 128, 1, 1)
+    }
+
+    private fun sanitizeAssistantResponse(raw: String): String {
+        val strippedThinkBlocks = THINK_BLOCK_REGEX.replace(raw, "")
+        val strippedTags = THINK_TAG_REGEX.replace(strippedThinkBlocks, "")
+        return strippedTags.trim().ifEmpty { raw.trim() }
+    }
+
+    private companion object {
+        val THINK_BLOCK_REGEX = Regex(
+            pattern = "<think\\b[^>]*>.*?</think>",
+            options = setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+        )
+        val THINK_TAG_REGEX = Regex("</?think\\b[^>]*>", RegexOption.IGNORE_CASE)
     }
 }

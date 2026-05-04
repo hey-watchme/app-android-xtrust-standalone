@@ -17,7 +17,7 @@
 constexpr int N_THREADS_MIN = 2;
 constexpr int N_THREADS_MAX = 4;
 constexpr int N_THREADS_HEADROOM = 2;
-constexpr int DEFAULT_CONTEXT_SIZE = 8192;
+constexpr int DEFAULT_CONTEXT_SIZE = 4096;
 constexpr int OVERFLOW_HEADROOM = 4;
 constexpr int BATCH_SIZE = 512;
 constexpr float DEFAULT_SAMPLER_TEMP = 0.5f;
@@ -360,7 +360,7 @@ Java_com_xtrust_bonsai_runtime_BonsaiNativeBridge_processUserPrompt(JNIEnv *env,
     }
 
     current_position += user_prompt_size;
-    stop_generation_position = current_position + user_prompt_size + n_predict;
+    stop_generation_position = current_position + n_predict;
     return 0;
 }
 
@@ -371,6 +371,9 @@ Java_com_xtrust_bonsai_runtime_BonsaiNativeBridge_generateNextToken(JNIEnv *env,
         shift_context();
     }
     if (current_position >= stop_generation_position) {
+        if (!assistant_ss.str().empty()) {
+            chat_add_and_format(ROLE_ASSISTANT, assistant_ss.str());
+        }
         return nullptr;
     }
 

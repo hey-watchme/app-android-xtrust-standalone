@@ -194,6 +194,78 @@ class TranscriptRepository(context: Context) {
         id
     }
 
+    suspend fun loadChatThreads(): List<ChatThreadEntity> = withContext(Dispatchers.IO) {
+        loadChatThreadsInternal()
+    }
+
+    suspend fun loadChatMessages(threadId: Long): List<ChatMessageEntity> = withContext(Dispatchers.IO) {
+        loadChatMessagesInternal(threadId)
+    }
+
+    suspend fun createChatThread(
+        title: String,
+        llmModel: String?
+    ): Long = withContext(Dispatchers.IO) {
+        val now = System.currentTimeMillis()
+        val values = ContentValues().apply {
+            put("title", title)
+            if (llmModel.isNullOrBlank()) {
+                putNull("llm_model")
+            } else {
+                put("llm_model", llmModel)
+            }
+            put("created_at", now)
+            put("updated_at", now)
+        }
+        dbHelper.writableDatabase.insertOrThrow("chat_threads", null, values)
+    }
+
+    suspend fun updateChatThreadTitle(
+        threadId: Long,
+        title: String
+    ) = withContext(Dispatchers.IO) {
+        val values = ContentValues().apply {
+            put("title", title)
+            put("updated_at", System.currentTimeMillis())
+        }
+        dbHelper.writableDatabase.update(
+            "chat_threads",
+            values,
+            "id = ?",
+            arrayOf(threadId.toString())
+        )
+    }
+
+    suspend fun saveChatMessage(
+        threadId: Long,
+        role: String,
+        text: String,
+        llmModel: String?
+    ): Long = withContext(Dispatchers.IO) {
+        val now = System.currentTimeMillis()
+        val db = dbHelper.writableDatabase
+        val messageValues = ContentValues().apply {
+            put("thread_id", threadId)
+            put("role", role)
+            put("text", text)
+            put("created_at", now)
+        }
+        val messageId = db.insertOrThrow("chat_messages", null, messageValues)
+        val threadValues = ContentValues().apply {
+            put("updated_at", now)
+            if (!llmModel.isNullOrBlank()) {
+                put("llm_model", llmModel)
+            }
+        }
+        db.update(
+            "chat_threads",
+            threadValues,
+            "id = ?",
+            arrayOf(threadId.toString())
+        )
+        messageId
+    }
+
     private fun loadCards(): List<CardEntity> {
         val db = dbHelper.readableDatabase
         val cards = mutableListOf<CardEntity>()
@@ -297,6 +369,56 @@ class TranscriptRepository(context: Context) {
             }
         }
         return sessions
+    }
+
+    private fun loadChatThreadsInternal(): List<ChatThreadEntity> {
+        val db = dbHelper.readableDatabase
+        val threads = mutableListOf<ChatThreadEntity>()
+        db.query(
+            "chat_threads",
+            null,
+            null,
+            null,
+            null,
+            null,
+            "updated_at DESC, id DESC"
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                threads += ChatThreadEntity(
+                    id = cursor.getLong(cursor.getColumnIndexOrThrow("id")),
+                    title = cursor.getString(cursor.getColumnIndexOrThrow("title")),
+                    llmModel = cursor.getStringOrNull("llm_model"),
+                    createdAt = cursor.getLong(cursor.getColumnIndexOrThrow("created_at")),
+                    updatedAt = cursor.getLong(cursor.getColumnIndexOrThrow("updated_at"))
+                )
+            }
+        }
+        return threads
+    }
+
+    private fun loadChatMessagesInternal(threadId: Long): List<ChatMessageEntity> {
+        val db = dbHelper.readableDatabase
+        val messages = mutableListOf<ChatMessageEntity>()
+        db.query(
+            "chat_messages",
+            null,
+            "thread_id = ?",
+            arrayOf(threadId.toString()),
+            null,
+            null,
+            "created_at ASC, id ASC"
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                messages += ChatMessageEntity(
+                    id = cursor.getLong(cursor.getColumnIndexOrThrow("id")),
+                    threadId = cursor.getLong(cursor.getColumnIndexOrThrow("thread_id")),
+                    role = cursor.getString(cursor.getColumnIndexOrThrow("role")),
+                    text = cursor.getString(cursor.getColumnIndexOrThrow("text")),
+                    createdAt = cursor.getLong(cursor.getColumnIndexOrThrow("created_at"))
+                )
+            }
+        }
+        return messages
     }
 
     private fun android.database.Cursor.getLongOrNull(columnName: String): Long? {

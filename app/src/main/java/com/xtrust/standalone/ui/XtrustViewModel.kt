@@ -9,8 +9,10 @@ import androidx.lifecycle.viewModelScope
 import com.xtrust.standalone.audio.MicrophoneVadMonitor
 import com.xtrust.standalone.audio.WavFileWriter
 import com.xtrust.standalone.data.CardEntity
+import com.xtrust.standalone.data.ChatThreadEntity
 import com.xtrust.standalone.asr.LocalAsrEngine
 import com.xtrust.standalone.asr.SherpaOnnxAsrEngine
+import com.xtrust.standalone.data.ChatMessageEntity as StoredChatMessageEntity
 import com.xtrust.standalone.data.TopicEntity
 import com.xtrust.standalone.data.TranscriptRepository
 import com.xtrust.standalone.llm.LlmDiagnostics
@@ -40,9 +42,12 @@ import java.util.Locale
 
 data class UiState(
     val llmReady: Boolean = false,
+    val isLoadingLlmModel: Boolean = false,
     val llmModelPath: String = "",
     val selectedLlmId: String = "",
     val loadedLlmId: String? = null,
+    val selectedChatThreadId: Long? = null,
+    val chatThreads: List<ChatThreadItem> = emptyList(),
     val availableLlmOptions: List<LlmModelOption> = emptyList(),
     val isProcessing: Boolean = false,
     val lastError: String? = null,
@@ -90,19 +95,21 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
     val cards = repository.cards.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val topics = repository.topics.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val sessions = repository.sessions.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-    private var nextChatMessageId = 1L
     private val captureLock = Any()
     private val asrTranscriptionMutex = Mutex()
     private val preRollFrames = ArrayDeque<ShortArray>()
     private val activeSpeechFrames = mutableListOf<ShortArray>()
     private val maxPreRollFrames = 10
     private var activeSessionId: Long? = null
+    private var activeRuntimeThreadId: Long? = null
+    private var runtimeNeedsBootstrap: Boolean = true
 
     init {
         ensureKnownAsrDirs()
         viewModelScope.launch {
             repository.recoverDanglingSessions(System.currentTimeMillis())
             repository.refresh()
+            ensureChatThreadSelection()
         }
         startMemoryMonitor()
         autoLoadLlmModel()
@@ -148,7 +155,9 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
 
     fun releaseLlmModel() {
         releaseCurrentLlmEngine()
-        clearLlmLoadedState(clearChat = true, clearLastError = true)
+        clearLlmLoadedState(clearChat = false, clearLastError = true)
+        activeRuntimeThreadId = null
+        runtimeNeedsBootstrap = true
         refreshMemorySnapshot()
     }
 
@@ -209,6 +218,7 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
                 it.copy(
                     selectedLlmId = definition.id,
                     llmModelPath = definition.modelPath,
+                    isLoadingLlmModel = true,
                     isProcessing = true,
                     lastError = null
                 )
@@ -216,10 +226,11 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
 
             if (!definition.isLoadable) {
                 _uiState.update {
-                    it.copy(
-                        isProcessing = false,
-                        lastError = definition.implementationNote
-                            ?: "${definition.displayName} はまだ接続されていません。"
+                        it.copy(
+                            isLoadingLlmModel = false,
+                            isProcessing = false,
+                            lastError = definition.implementationNote
+                                ?: "${definition.displayName} はまだ接続されていません。"
                     )
                 }
                 return@launch
@@ -231,6 +242,7 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
                 !file.exists() ->
                     _uiState.update {
                         it.copy(
+                            isLoadingLlmModel = false,
                             isProcessing = false,
                             lastError = if (showMissingErrors) {
                                 "${definition.displayName} のモデルファイルが見つかりません。配置を確認してください。"
@@ -242,6 +254,7 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
                 file.length() < definition.minimumFileSizeBytes ->
                     _uiState.update {
                         it.copy(
+                            isLoadingLlmModel = false,
                             isProcessing = false,
                             lastError = if (showMissingErrors) {
                                 "${definition.displayName} のモデルファイルが不完全です（${file.length() / 1_000_000}MB）。転送完了後に再試行してください。"
@@ -252,7 +265,7 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
                     }
                 else -> try {
                     releaseCurrentLlmEngine()
-                    clearLlmLoadedState(clearChat = true, clearLastError = false)
+                    clearLlmLoadedState(clearChat = false, clearLastError = false)
 
                     val engine = checkNotNull(definition.engineFactory).invoke(getApplication())
                     engine.initialize(definition.modelPath)
@@ -264,18 +277,23 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
                             llmReady = true,
                             loadedLlmId = definition.id,
                             llmModelPath = definition.modelPath,
+                            isLoadingLlmModel = false,
                             isProcessing = false,
                             llmRuntimeInfo = runtimeInfo,
                             llmBenchmarkResult = null,
                             isRunningBenchmark = false
                         )
                     }
+                    resetRuntimeConversationForSelectedThread()
                     refreshMemorySnapshot()
                 } catch (e: Exception) {
                     releaseCurrentLlmEngine()
-                    clearLlmLoadedState(clearChat = true, clearLastError = false)
+                    clearLlmLoadedState(clearChat = false, clearLastError = false)
+                    activeRuntimeThreadId = null
+                    runtimeNeedsBootstrap = true
                     _uiState.update {
                         it.copy(
+                            isLoadingLlmModel = false,
                             isProcessing = false,
                             lastError = "ロード失敗: ${e.message}"
                         )
@@ -449,12 +467,29 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
             return
         }
 
-        appendChatMessage(ChatRole.User, trimmed)
         viewModelScope.launch {
             _uiState.update { it.copy(isProcessing = true, lastError = null) }
             try {
-                val reply = engine.sendChatMessage(trimmed)
-                appendChatMessage(ChatRole.Assistant, reply)
+                val threadId = ensureSelectedChatThreadId()
+                val existingMessages = repository.loadChatMessages(threadId)
+                val loadedModel = loadedLlmDefinition()?.dbModel
+                repository.saveChatMessage(threadId, CHAT_ROLE_USER, trimmed, loadedModel)
+                if (existingMessages.isEmpty()) {
+                    repository.updateChatThreadTitle(threadId, buildChatThreadTitle(trimmed))
+                }
+                syncChatThreadState(threadId)
+                val reply = if (shouldBootstrapThread(threadId) && existingMessages.isNotEmpty()) {
+                    engine.generate(buildChatPrompt(_chatMessages.value))
+                } else {
+                    if (activeRuntimeThreadId != threadId) {
+                        engine.resetChat()
+                    }
+                    engine.sendChatMessage(trimmed)
+                }
+                repository.saveChatMessage(threadId, CHAT_ROLE_ASSISTANT, reply, loadedModel)
+                activeRuntimeThreadId = threadId
+                runtimeNeedsBootstrap = false
+                syncChatThreadState(threadId)
             } catch (e: Exception) {
                 _uiState.update { it.copy(lastError = "チャット失敗: ${e.message}") }
             } finally {
@@ -465,10 +500,25 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun resetChat() {
-        llmEngine?.resetChat()
-        _chatMessages.value = emptyList()
-        _uiState.update { it.copy(lastError = null) }
-        refreshMemorySnapshot()
+        createChatThread()
+    }
+
+    fun createChatThread() {
+        viewModelScope.launch {
+            val threadId = repository.createChatThread(
+                title = DEFAULT_CHAT_THREAD_TITLE,
+                llmModel = loadedLlmDefinition()?.dbModel
+            )
+            syncChatThreadState(threadId)
+            resetRuntimeConversationForSelectedThread()
+        }
+    }
+
+    fun selectChatThread(threadId: Long) {
+        viewModelScope.launch {
+            syncChatThreadState(threadId)
+            resetRuntimeConversationForSelectedThread()
+        }
     }
 
     fun startVadMonitoring() {
@@ -575,16 +625,6 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
         _uiState.update { it.copy(lastError = "マイク権限が必要です。録音許可を有効にしてください。") }
     }
 
-    private fun appendChatMessage(role: ChatRole, text: String) {
-        _chatMessages.update { current ->
-            current + ChatMessage(
-                id = nextChatMessageId++,
-                role = role,
-                text = text
-            )
-        }
-    }
-
     private fun startMemoryMonitor() {
         viewModelScope.launch {
             while (isActive) {
@@ -617,6 +657,121 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun bytesToMb(bytes: Long): Long = bytes / (1024 * 1024)
+
+    private fun shouldBootstrapThread(threadId: Long): Boolean {
+        return runtimeNeedsBootstrap || activeRuntimeThreadId != threadId
+    }
+
+    private fun resetRuntimeConversationForSelectedThread() {
+        if (llmEngine?.isReady == true) {
+            llmEngine?.resetChat()
+        }
+        activeRuntimeThreadId = _uiState.value.selectedChatThreadId
+        runtimeNeedsBootstrap = _chatMessages.value.isNotEmpty()
+    }
+
+    private suspend fun ensureChatThreadSelection() {
+        val threads = repository.loadChatThreads()
+        if (threads.isEmpty()) {
+            val threadId = repository.createChatThread(
+                title = DEFAULT_CHAT_THREAD_TITLE,
+                llmModel = loadedLlmDefinition()?.dbModel
+            )
+            syncChatThreadState(threadId)
+            return
+        }
+        val selectedId = _uiState.value.selectedChatThreadId
+            ?.takeIf { id -> threads.any { it.id == id } }
+            ?: threads.first().id
+        syncChatThreadState(selectedId, threads)
+    }
+
+    private suspend fun ensureSelectedChatThreadId(): Long {
+        val selectedId = _uiState.value.selectedChatThreadId
+        if (selectedId != null) return selectedId
+        val threadId = repository.createChatThread(
+            title = DEFAULT_CHAT_THREAD_TITLE,
+            llmModel = loadedLlmDefinition()?.dbModel
+        )
+        syncChatThreadState(threadId)
+        return threadId
+    }
+
+    private suspend fun syncChatThreadState(
+        selectedThreadId: Long
+    ) {
+        syncChatThreadState(selectedThreadId, repository.loadChatThreads())
+    }
+
+    private suspend fun syncChatThreadState(
+        selectedThreadId: Long,
+        threads: List<ChatThreadEntity>
+    ) {
+        val selectedId = threads.firstOrNull { it.id == selectedThreadId }?.id
+            ?: threads.firstOrNull()?.id
+            ?: return
+        val messages = repository.loadChatMessages(selectedId)
+        _chatMessages.value = messages.map(::toUiChatMessage)
+        _uiState.update {
+            it.copy(
+                selectedChatThreadId = selectedId,
+                chatThreads = threads.map { thread -> toChatThreadItem(thread, thread.id == selectedId) }
+            )
+        }
+    }
+
+    private fun toUiChatMessage(message: StoredChatMessageEntity): ChatMessage {
+        return ChatMessage(
+            id = message.id,
+            role = if (message.role == CHAT_ROLE_USER) ChatRole.User else ChatRole.Assistant,
+            text = message.text,
+            createdAt = message.createdAt
+        )
+    }
+
+    private fun toChatThreadItem(thread: ChatThreadEntity, isSelected: Boolean): ChatThreadItem {
+        return ChatThreadItem(
+            id = thread.id,
+            title = thread.title,
+            updatedAtLabel = formatChatThreadTimestamp(thread.updatedAt),
+            isSelected = isSelected
+        )
+    }
+
+    private fun formatChatThreadTimestamp(timestamp: Long): String {
+        val format = SimpleDateFormat("M/d HH:mm", Locale.JAPAN)
+        return format.format(Date(timestamp))
+    }
+
+    private fun buildChatThreadTitle(firstUserMessage: String): String {
+        val normalized = firstUserMessage
+            .lineSequence()
+            .map(String::trim)
+            .firstOrNull { it.isNotEmpty() }
+            .orEmpty()
+        return normalized
+            .take(24)
+            .ifBlank { DEFAULT_CHAT_THREAD_TITLE }
+    }
+
+    private fun buildChatPrompt(messages: List<ChatMessage>): String {
+        val recentMessages = messages.takeLast(MAX_CHAT_HISTORY_MESSAGES)
+        val transcript = recentMessages.joinToString(separator = "\n") { message ->
+            val role = if (message.role == ChatRole.User) "User" else "Assistant"
+            "$role: ${message.text}"
+        }
+        return """
+            Continue the conversation below.
+            Reply as the assistant only.
+            Reply in the same language as the latest user message.
+            Be concise, direct, and do not output hidden reasoning or XML-like tags.
+
+            Conversation:
+            $transcript
+
+            Assistant:
+        """.trimIndent()
+    }
 
     private fun processVadFrame(frame: ShortArray, result: VadFrameResult) {
         var segmentToSave: ShortArray? = null
@@ -964,6 +1119,10 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
         const val SAMPLE_RATE = 16_000
         const val MIN_SEGMENT_DURATION_MS = 900L
         const val AUTO_TRANSCRIBE_SEGMENTS = true
+        const val DEFAULT_CHAT_THREAD_TITLE = "新しいチャット"
+        const val MAX_CHAT_HISTORY_MESSAGES = 8
+        const val CHAT_ROLE_USER = "user"
+        const val CHAT_ROLE_ASSISTANT = "assistant"
         val KNOWN_ASR_MODEL_DIR_NAMES = listOf(
             "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09",
             "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17"

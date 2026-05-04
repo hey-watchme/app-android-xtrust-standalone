@@ -12,6 +12,13 @@ data class ChatMessage(
     val createdAt: Long = System.currentTimeMillis()
 )
 
+data class ChatThreadItem(
+    val id: Long,
+    val title: String,
+    val updatedAtLabel: String,
+    val isSelected: Boolean
+)
+
 data class LlmModelOption(
     val id: String,
     val displayName: String,

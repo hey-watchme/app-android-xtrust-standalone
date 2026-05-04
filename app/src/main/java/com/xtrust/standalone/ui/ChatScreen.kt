@@ -1,31 +1,38 @@
 package com.xtrust.standalone.ui
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -36,6 +43,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.xtrust.standalone.ui.theme.AccentOnPrimary
 import com.xtrust.standalone.ui.theme.AccentPrimary
@@ -59,8 +68,16 @@ fun ChatScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
     val selectedLlm = uiState.availableLlmOptions.firstOrNull { it.id == uiState.selectedLlmId }
     val loadedLlm = uiState.availableLlmOptions.firstOrNull { it.id == uiState.loadedLlmId }
     val assistantLabel = loadedLlm?.assistantLabel ?: selectedLlm?.assistantLabel ?: "AI"
+    val selectedThread = uiState.chatThreads.firstOrNull { it.isSelected }
     val listState = rememberLazyListState()
     var draft by rememberSaveable { mutableStateOf("") }
+    val submitMessage = {
+        val message = draft.trim()
+        if (uiState.llmReady && !uiState.isProcessing && message.isNotEmpty()) {
+            viewModel.sendChatMessage(message)
+            draft = ""
+        }
+    }
 
     LaunchedEffect(messages.size, uiState.isProcessing) {
         val itemCount = messages.size + if (uiState.isProcessing) 1 else 0
@@ -73,212 +90,309 @@ fun ChatScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
         modifier = modifier
             .fillMaxSize()
             .background(SurfaceBackground)
-            .padding(Spacing.xl)
+            .padding(horizontal = Spacing.xl, vertical = Spacing.lg)
+    ) {
+        ChatHeader(
+            uiState = uiState,
+            selectedLlm = selectedLlm,
+            loadedLlm = loadedLlm
+        )
+        Spacer(modifier = Modifier.height(Spacing.md))
+        HorizontalDivider(color = DividerStrong, thickness = Sizes.hairline)
+        Spacer(modifier = Modifier.height(Spacing.md))
+
+        Row(
+            modifier = Modifier
+                .fillMaxSize(),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.lg)
+        ) {
+            ChatThreadSidebar(
+                threads = uiState.chatThreads,
+                isProcessing = uiState.isProcessing,
+                onCreateThread = viewModel::createChatThread,
+                onSelectThread = viewModel::selectChatThread
+            )
+
+            Box(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .width(Sizes.hairline)
+                    .background(DividerStrong)
+            )
+
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+            ) {
+                Scaffold(
+                    modifier = Modifier.fillMaxSize(),
+                    containerColor = SurfaceBackground,
+                    contentWindowInsets = WindowInsets(0, 0, 0, 0),
+                    bottomBar = {
+                        ChatComposer(
+                            draft = draft,
+                            onDraftChange = { draft = it },
+                            onSubmit = submitMessage,
+                            enabled = uiState.llmReady && !uiState.isProcessing,
+                            canSend = uiState.llmReady && !uiState.isProcessing && draft.isNotBlank()
+                        )
+                    }
+                ) { innerPadding ->
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(innerPadding)
+                            .consumeWindowInsets(innerPadding)
+                    ) {
+                        ThreadHeader(selectedThread = selectedThread)
+                        Spacer(modifier = Modifier.height(Spacing.md))
+                        HorizontalDivider(color = DividerStrong, thickness = Sizes.hairline)
+                        Spacer(modifier = Modifier.height(Spacing.md))
+
+                        LazyColumn(
+                            state = listState,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f),
+                            contentPadding = PaddingValues(vertical = Spacing.sm)
+                        ) {
+                            if (messages.isEmpty()) {
+                                item {
+                                    EmptyChatState(
+                                        llmReady = uiState.llmReady,
+                                        selectedLlm = selectedLlm,
+                                        isLoadingLlmModel = uiState.isLoadingLlmModel
+                                    )
+                                }
+                            } else {
+                                items(messages, key = { it.id }) { message ->
+                                    ChatBubble(
+                                        message = message,
+                                        assistantLabel = assistantLabel
+                                    )
+                                    Spacer(modifier = Modifier.height(Spacing.md))
+                                }
+                            }
+
+                            if (uiState.isProcessing) {
+                                item {
+                                    ThinkingBubble(assistantLabel = assistantLabel)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChatComposer(
+    draft: String,
+    onDraftChange: (String) -> Unit,
+    onSubmit: () -> Unit,
+    enabled: Boolean,
+    canSend: Boolean
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(SurfaceBackground)
+            .imePadding()
+            .padding(top = Spacing.sm),
+        verticalAlignment = Alignment.Bottom,
+        horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
+    ) {
+        OutlinedTextField(
+            value = draft,
+            onValueChange = onDraftChange,
+            modifier = Modifier.weight(1f),
+            enabled = enabled,
+            minLines = 1,
+            maxLines = 4,
+            shape = RoundedCornerShape(Radius.md),
+            placeholder = { Text("メッセージを入力") },
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+            keyboardActions = KeyboardActions(onSend = { onSubmit() }),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = AccentPrimary,
+                unfocusedBorderColor = DividerStrong,
+                cursorColor = AccentPrimary,
+                focusedTextColor = TextPrimary,
+                unfocusedTextColor = TextPrimary,
+                focusedPlaceholderColor = TextTertiary,
+                unfocusedPlaceholderColor = TextTertiary
+            )
+        )
+
+        Button(
+            onClick = onSubmit,
+            enabled = canSend,
+            modifier = Modifier.height(56.dp),
+            shape = RoundedCornerShape(Radius.md),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = AccentPrimary,
+                contentColor = AccentOnPrimary
+            )
+        ) {
+            Text("送信")
+        }
+    }
+}
+
+@Composable
+private fun ChatThreadSidebar(
+    threads: List<ChatThreadItem>,
+    isProcessing: Boolean,
+    onCreateThread: () -> Unit,
+    onSelectThread: (Long) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .width(248.dp)
+            .fillMaxHeight()
     ) {
         Text(
-            text = "ローカルチャット",
+            text = "トピックス",
+            style = MaterialTheme.typography.titleMedium,
+            color = TextPrimary
+        )
+        Spacer(modifier = Modifier.height(Spacing.sm))
+        Button(
+            onClick = onCreateThread,
+            enabled = !isProcessing,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(Radius.md),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = AccentPrimary,
+                contentColor = AccentOnPrimary
+            )
+        ) {
+            Text("新しいチャット")
+        }
+        Spacer(modifier = Modifier.height(Spacing.md))
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+        ) {
+            items(threads, key = { it.id }) { thread ->
+                ChatThreadRow(
+                    thread = thread,
+                    enabled = !isProcessing,
+                    onClick = { onSelectThread(thread.id) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChatThreadRow(
+    thread: ChatThreadItem,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(Radius.md))
+            .background(if (thread.isSelected) SurfaceMuted else SurfaceSubtle)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(Spacing.md)
+    ) {
+        Text(
+            text = thread.title,
+            style = MaterialTheme.typography.titleSmall,
+            color = TextPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Spacer(modifier = Modifier.height(Spacing.xs))
+        Text(
+            text = thread.updatedAtLabel,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (thread.isSelected) TextSecondary else TextTertiary
+        )
+    }
+}
+
+@Composable
+private fun ChatHeader(
+    uiState: UiState,
+    selectedLlm: LlmModelOption?,
+    loadedLlm: LlmModelOption?
+) {
+    val memory = uiState.memorySnapshot
+    Column(
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Text(
+            text = "チャット",
             style = MaterialTheme.typography.headlineSmall,
             color = TextPrimary
         )
         Spacer(modifier = Modifier.height(Spacing.xs))
         Text(
-            text = "端末内 LLM の対話品質を確認する画面です。録音と文字起こしの検証はホームで行います。",
-            style = MaterialTheme.typography.bodySmall,
-            color = TextTertiary
-        )
-        Spacer(modifier = Modifier.height(Spacing.lg))
-        HorizontalDivider(color = DividerStrong, thickness = Sizes.hairline)
-        Spacer(modifier = Modifier.height(Spacing.lg))
-
-        LazyColumn(
-            state = listState,
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f),
-            contentPadding = PaddingValues(bottom = Spacing.lg)
-        ) {
-            item {
-                ChatStatusCard(
-                    uiState = uiState,
-                    selectedLlm = selectedLlm,
-                    loadedLlm = loadedLlm,
-                    onResetChat = viewModel::resetChat
-                )
-            }
-
-            item {
-                Spacer(modifier = Modifier.height(Spacing.md))
-            }
-
-            if (messages.isEmpty()) {
-                item {
-                    EmptyChatState(
-                        llmReady = uiState.llmReady,
-                        selectedLlm = selectedLlm
-                    )
-                }
-            } else {
-                items(messages, key = { it.id }) { message ->
-                    ChatBubble(
-                        message = message,
-                        assistantLabel = assistantLabel
-                    )
-                    Spacer(modifier = Modifier.height(Spacing.md))
-                }
-            }
-
-            if (uiState.isProcessing) {
-                item {
-                    ThinkingBubble(assistantLabel = assistantLabel)
-                }
-            }
-        }
-
-        uiState.lastError?.let { error ->
-            Text(
-                text = error,
-                style = MaterialTheme.typography.bodySmall,
-                color = StatusError,
-                modifier = Modifier.padding(bottom = Spacing.md)
-            )
-        }
-
-        OutlinedTextField(
-            value = draft,
-            onValueChange = { draft = it },
-            modifier = Modifier.fillMaxWidth(),
-            enabled = uiState.llmReady && !uiState.isProcessing,
-            minLines = 3,
-            maxLines = 6,
-            shape = RoundedCornerShape(Radius.md),
-            label = { Text("メッセージ") },
-            placeholder = { Text("日本語で質問や指示を入力") },
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = AccentPrimary,
-                unfocusedBorderColor = DividerStrong,
-                focusedLabelColor = TextSecondary,
-                unfocusedLabelColor = TextTertiary,
-                cursorColor = AccentPrimary,
-                focusedTextColor = TextPrimary,
-                unfocusedTextColor = TextPrimary
-            )
-        )
-
-        Spacer(modifier = Modifier.height(Spacing.sm))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
-        ) {
-            OutlinedButton(
-                onClick = { draft = "" },
-                enabled = draft.isNotEmpty() && !uiState.isProcessing,
-                modifier = Modifier.weight(1f),
-                shape = RoundedCornerShape(Radius.md),
-                border = BorderStroke(Sizes.hairline, DividerStrong),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary)
-            ) {
-                Text("入力を消去")
-            }
-
-            Button(
-                onClick = {
-                    viewModel.sendChatMessage(draft)
-                    draft = ""
-                },
-                enabled = uiState.llmReady && !uiState.isProcessing && draft.isNotBlank(),
-                modifier = Modifier.weight(1f),
-                shape = RoundedCornerShape(Radius.md),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = AccentPrimary,
-                    contentColor = AccentOnPrimary
-                )
-            ) {
-                Text("送信")
-            }
-        }
-    }
-}
-
-@Composable
-private fun ChatStatusCard(
-    uiState: UiState,
-    selectedLlm: LlmModelOption?,
-    loadedLlm: LlmModelOption?,
-    onResetChat: () -> Unit
-) {
-    val memory = uiState.memorySnapshot
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(Radius.lg))
-            .background(SurfaceMuted)
-            .padding(Spacing.lg)
-    ) {
-        Text(
             text = if (uiState.llmReady) {
                 "${loadedLlm?.displayName ?: "ローカル LLM"} を使用中"
+            } else if (uiState.isLoadingLlmModel) {
+                "${selectedLlm?.displayName ?: "ローカル LLM"} を読み込み中…"
             } else {
                 "${selectedLlm?.displayName ?: "ローカル LLM"} は未ロードです"
             },
-            style = MaterialTheme.typography.titleSmall,
-            color = if (uiState.llmReady) StatusReady else StatusError
+            style = MaterialTheme.typography.bodySmall,
+            color = when {
+                uiState.llmReady -> StatusReady
+                uiState.isLoadingLlmModel -> TextSecondary
+                else -> StatusError
+            }
         )
         Spacer(modifier = Modifier.height(Spacing.xs))
         Text(
-            text = "端末メモリ ${memory.deviceUsedMb} / ${memory.deviceTotalMb} MB 使用中",
-            style = MaterialTheme.typography.labelSmall,
+            text = "端末 ${memory.deviceUsedMb}/${memory.deviceTotalMb}MB  ・  空き ${memory.deviceAvailableMb}MB  ・  アプリ ${memory.appHeapUsedMb}/${memory.appHeapMaxMb}MB  ・  ネイティブ ${memory.nativeHeapMb}MB",
+            style = MaterialTheme.typography.bodySmall,
             color = TextSecondary
         )
-        Spacer(modifier = Modifier.height(Spacing.xs))
-        Text(
-            text = "アプリヒープ ${memory.appHeapUsedMb} / ${memory.appHeapMaxMb} MB",
-            style = MaterialTheme.typography.labelSmall,
-            color = TextSecondary
-        )
-        Spacer(modifier = Modifier.height(Spacing.xs))
-        Text(
-            text = "ネイティブヒープ ${memory.nativeHeapMb} MB  空き ${memory.deviceAvailableMb} MB",
-            style = MaterialTheme.typography.labelSmall,
-            color = TextSecondary
-        )
-        if (selectedLlm != null && loadedLlm != null && selectedLlm.id != loadedLlm.id) {
-            Spacer(modifier = Modifier.height(Spacing.xs))
-            Text(
-                text = "切替先として ${selectedLlm.displayName} が選択されています。切替は設定画面で実行します。",
-                style = MaterialTheme.typography.labelSmall,
-                color = TextTertiary
-            )
-        }
         if (memory.lowMemory) {
             Spacer(modifier = Modifier.height(Spacing.xs))
             Text(
                 text = "システムから低メモリ警告を受けています",
-                style = MaterialTheme.typography.labelSmall,
+                style = MaterialTheme.typography.bodySmall,
                 color = StatusError
             )
         }
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = Spacing.md),
-            horizontalArrangement = Arrangement.End
-        ) {
-            OutlinedButton(
-                onClick = onResetChat,
-                enabled = uiState.llmReady && !uiState.isProcessing,
-                shape = RoundedCornerShape(Radius.md),
-                border = BorderStroke(Sizes.hairline, DividerStrong),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary)
-            ) {
-                Text("会話をリセット")
-            }
+        uiState.lastError?.let { error ->
+            Spacer(modifier = Modifier.height(Spacing.xs))
+            Text(
+                text = error,
+                style = MaterialTheme.typography.bodySmall,
+                color = StatusError
+            )
         }
     }
 }
 
 @Composable
-private fun EmptyChatState(llmReady: Boolean, selectedLlm: LlmModelOption?) {
+private fun ThreadHeader(selectedThread: ChatThreadItem?) {
+    Text(
+        text = selectedThread?.title ?: "新しいチャット",
+        style = MaterialTheme.typography.titleLarge,
+        color = TextPrimary,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis
+    )
+}
+
+@Composable
+private fun EmptyChatState(
+    llmReady: Boolean,
+    selectedLlm: LlmModelOption?,
+    isLoadingLlmModel: Boolean = false
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -288,14 +402,20 @@ private fun EmptyChatState(llmReady: Boolean, selectedLlm: LlmModelOption?) {
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
-            text = if (llmReady) "会話を始めてください" else "モデルを読み込んでください",
+            text = when {
+                llmReady -> "会話を始めてください"
+                isLoadingLlmModel -> "モデルを読み込み中です"
+                else -> "モデルを読み込んでください"
+            },
             style = MaterialTheme.typography.titleMedium,
             color = TextPrimary
         )
         Spacer(modifier = Modifier.height(Spacing.xs))
         Text(
             text = if (llmReady) {
-                "複数ターンの対話品質を、端末上だけで確認できます。"
+                "このスレッドは空です。最初のメッセージを送ると会話が保存されます。"
+            } else if (isLoadingLlmModel) {
+                "起動時に前回のモデルを自動で読み込んでいます。完了まで少し待ってください。"
             } else if (selectedLlm?.isLoadable == false) {
                 "${selectedLlm.displayName} はまだ未接続です。設定画面で実装済みモデルを選んでください。"
             } else {

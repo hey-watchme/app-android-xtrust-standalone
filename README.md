@@ -1,6 +1,6 @@
 # Android Standalone ZeroTouch PoC Handoff
 
-Date: 2026-05-03 JST
+Date: 2026-05-05 JST
 
 This directory is reserved for a new standalone Android PoC that is independent
 from WatchMe / ZeroTouch cloud infrastructure.
@@ -24,7 +24,17 @@ Current implementation status and restart notes are tracked in:
 - `bonsaiDebug`
   - `applicationId`: `com.xtrust.standalone.bonsai`
   - runtime: llama.cpp (GGUF)
-  - model path: `/sdcard/Android/data/com.xtrust.standalone.bonsai/files/models/Bonsai-1.7B-Q1_0.gguf`
+  - default model path: `/sdcard/Android/data/com.xtrust.standalone.bonsai/files/models/Bonsai-8B.gguf`
+  - fallback model path: `/sdcard/Android/data/com.xtrust.standalone.bonsai/files/models/Bonsai-1.7B-Q1_0.gguf`
+
+Important: `gemma` / `bonsai` は **別アプリ** です（`applicationIdSuffix`）。
+そのため、次は **相互に共有されません**（見えません）。
+
+- 録音セッション（DB）
+- チャットスレッド（DB）
+- ASR モデル配置（`files/asr/`）
+- LLM モデル配置（`files/models/`）
+- 収録 wav（`files/audio-segments/`）
 
 ビルド:
 
@@ -34,6 +44,39 @@ Current implementation status and restart notes are tracked in:
 ```
 
 Bonsai の導入と実機ベンチ手順は `docs/bonsai-runtime.md` を参照してください。
+
+## Local Data Locations
+
+- External files root: `/sdcard/Android/data/<package>/files/`
+  - LLM models: `files/models/`
+  - ASR models: `files/asr/`
+  - audio segments: `files/audio-segments/`
+- SQLite DB: `xtrust-standalone.db`（各アプリの内部領域に保存）
+  - debug build でのみ確認する例:
+
+```bash
+adb shell run-as com.xtrust.standalone.bonsai ls -la databases
+adb shell run-as com.xtrust.standalone.gemma ls -la databases
+```
+
+## Model Quality Check on Mac (llama.cpp)
+
+Android 端末が低スペックでも「モデル品質だけ」先に確認したい場合は、Mac 上で `llama.cpp` を直接実行できます。
+
+前提:
+
+- Mac: `~/models/bonsai-8b/Bonsai-8B.gguf`
+- Mac: `~/models/bonsai-1.7b-q1_0/Bonsai-1.7B-Q1_0.gguf`
+
+例（Metal を使ってビルドして実行）:
+
+```bash
+git clone https://github.com/ggml-org/llama.cpp.git
+cd llama.cpp
+cmake -B build -DGGML_METAL=ON
+cmake --build build -j
+./build/bin/llama-cli -m ~/models/bonsai-8b/Bonsai-8B.gguf -n 320 --temp 0.5 --top-k 20 --top-p 0.9 -p "こんにちは。3行で自己紹介してください。"
+```
 
 ## UI Design (2026-05-04)
 
@@ -71,7 +114,7 @@ Applied Notion-style modern design system to the app:
 - All hardcoded colors and dimensions replaced with theme tokens
 - Material 3 components retained but restyled (colors, shapes, elevation adjusted)
 - Composable structure and state management unchanged; styling-only refactor
-- Build verified: `./gradlew assembleDebug` successful
+- Build verified: `./gradlew :app:assembleBonsaiDebug` successful
 
 ## Goal
 

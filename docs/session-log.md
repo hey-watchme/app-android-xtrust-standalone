@@ -1,6 +1,6 @@
 # Android Standalone — セッションログ / 再開ガイド
 
-最終更新: 2026-05-04
+最終更新: 2026-05-05
 
 ---
 
@@ -70,24 +70,24 @@ android-standalone/
 ```
 Mac: ~/models/gemma4-e2b/gemma-4-E2B-it.litertlm  (2.4GB)
 
-デバイス: /sdcard/Android/data/com.xtrust.standalone/files/models/gemma-4-E2B-it.litertlm
+デバイス（gemmaDebug）: /sdcard/Android/data/com.xtrust.standalone.gemma/files/models/gemma-4-E2B-it.litertlm
 ```
 
 ### adb push 手順（再転送・新端末セットアップ時）
 
 ```bash
 # 1. ディレクトリ作成
-adb shell mkdir -p /sdcard/Android/data/com.xtrust.standalone/files/models/
+adb shell mkdir -p /sdcard/Android/data/com.xtrust.standalone.gemma/files/models/
 
 # 2. ファイル転送（2.4GB、USB で 5〜10 分）
 adb push ~/models/gemma4-e2b/gemma-4-E2B-it.litertlm \
-  /sdcard/Android/data/com.xtrust.standalone/files/models/gemma-4-E2B-it.litertlm
+  /sdcard/Android/data/com.xtrust.standalone.gemma/files/models/gemma-4-E2B-it.litertlm
 
 # 3. 転送完了確認（2500000000 以上になれば完了）
-adb shell stat -c%s /sdcard/Android/data/com.xtrust.standalone/files/models/gemma-4-E2B-it.litertlm
+adb shell stat -c%s /sdcard/Android/data/com.xtrust.standalone.gemma/files/models/gemma-4-E2B-it.litertlm
 
 # 4. 【必須】ディレクトリ権限修正（これをしないとアプリがファイルを読めない）
-adb shell chmod 777 /sdcard/Android/data/com.xtrust.standalone/files/models/
+adb shell chmod 777 /sdcard/Android/data/com.xtrust.standalone.gemma/files/models/
 ```
 
 ---
@@ -182,7 +182,7 @@ engine.createConversation(ConversationConfig(
 
 ```bash
 # 確認コマンド（owner が shell になっていたらアウト）
-adb shell ls -la /sdcard/Android/data/com.xtrust.standalone/files/
+adb shell ls -la /sdcard/Android/data/com.xtrust.standalone.gemma/files/
 
 # drwxrws--- 2 shell ext_data_rw ... models  ← これがダメ
 ```
@@ -190,7 +190,7 @@ adb shell ls -la /sdcard/Android/data/com.xtrust.standalone/files/
 **解決策**: push 後に必ず chmod 777 を実行する。
 
 ```bash
-adb shell chmod 777 /sdcard/Android/data/com.xtrust.standalone/files/models/
+adb shell chmod 777 /sdcard/Android/data/com.xtrust.standalone.gemma/files/models/
 ```
 
 **将来の恒久対策案**:
@@ -340,20 +340,39 @@ when {
 cd /Users/kaya.matsumoto/projects/xtrust/app/android-standalone
 
 # ビルド
-./gradlew assembleDebug
+./gradlew :app:assembleGemmaDebug
 
 # デバイス確認（WiFi ADB）
 adb devices
 
 # インストール
-adb install -r app/build/outputs/apk/debug/app-debug.apk
+adb install -r app/build/outputs/apk/gemma/debug/app-gemma-debug.apk
 
 # ログ確認（LLMエンジン + ViewModel）
 adb logcat -s LiteRtGemmaEngine XtrustVM
 
 # モデルファイル確認
-adb shell stat -c%s /sdcard/Android/data/com.xtrust.standalone/files/models/gemma-4-E2B-it.litertlm
+adb shell stat -c%s /sdcard/Android/data/com.xtrust.standalone.gemma/files/models/gemma-4-E2B-it.litertlm
 
 # 権限修正（新端末セットアップ時や push し直した後に必要）
-adb shell chmod 777 /sdcard/Android/data/com.xtrust.standalone/files/models/
+adb shell chmod 777 /sdcard/Android/data/com.xtrust.standalone.gemma/files/models/
+```
+
+---
+
+## 追記（2026-05-05）: flavor は別アプリ
+
+`gemma` と `bonsai` は `applicationIdSuffix` により別アプリ扱い。
+そのため、モデル配置先もデータ保存も別々になる。
+
+- `gemmaDebug`: `com.xtrust.standalone.gemma`
+- `bonsaiDebug`: `com.xtrust.standalone.bonsai`
+
+例（Bonsai 8B 配置）:
+
+```bash
+adb shell mkdir -p /sdcard/Android/data/com.xtrust.standalone.bonsai/files/models/
+adb push ~/models/bonsai-8b/Bonsai-8B.gguf \
+  /sdcard/Android/data/com.xtrust.standalone.bonsai/files/models/Bonsai-8B.gguf
+adb shell chmod 777 /sdcard/Android/data/com.xtrust.standalone.bonsai/files/models/
 ```

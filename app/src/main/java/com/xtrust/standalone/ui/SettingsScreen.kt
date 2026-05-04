@@ -22,6 +22,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -52,6 +53,8 @@ fun SettingsScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
     val selectedLlm = uiState.availableLlmOptions.firstOrNull { it.id == uiState.selectedLlmId }
     val loadedLlm = uiState.availableLlmOptions.firstOrNull { it.id == uiState.loadedLlmId }
     val selectedLlmFileName = selectedLlm?.modelPath?.substringAfterLast('/') ?: "model.litertlm"
+    val llmError = uiState.lastError?.takeUnless(::isAsrErrorMessage)
+    val asrError = uiState.lastError?.takeIf(::isAsrErrorMessage)
 
     Column(
         modifier = modifier
@@ -63,7 +66,7 @@ fun SettingsScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
         SectionLabel(text = "ローカル LLM")
         Spacer(modifier = Modifier.height(Spacing.sm))
         Text(
-            text = "チャット用モデル",
+            text = "LLMモデル",
             style = MaterialTheme.typography.titleMedium,
             color = TextPrimary
         )
@@ -71,16 +74,14 @@ fun SettingsScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
         Spacer(modifier = Modifier.height(Spacing.sm))
         StatusRow(
             ready = uiState.llmReady,
-            readyText = "${loadedLlm?.displayName ?: "ローカル LLM"} をロード中",
-            notReadyText = "未ロード"
+            readyText = "${loadedLlm?.displayName ?: "ローカル LLM"} を使用中",
+            notReadyText = if (uiState.isLoadingLlmModel) {
+                "${selectedLlm?.displayName ?: "ローカル LLM"} を読み込み中…"
+            } else {
+                "未ロード"
+            }
         )
 
-        Spacer(modifier = Modifier.height(Spacing.md))
-        Text(
-            text = "比較モデル",
-            style = MaterialTheme.typography.bodyMedium,
-            color = TextSecondary
-        )
         Spacer(modifier = Modifier.height(Spacing.sm))
         uiState.availableLlmOptions.forEach { option ->
             LlmOptionCard(
@@ -98,11 +99,6 @@ fun SettingsScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
             color = TextTertiary
         )
 
-        Spacer(modifier = Modifier.height(Spacing.md))
-        SectionLabel(text = "選択中のモデルパス")
-        Spacer(modifier = Modifier.height(Spacing.xs))
-        MonoBlock(text = selectedLlm?.modelPath ?: uiState.llmModelPath)
-
         selectedLlm?.implementationNote?.let { note ->
             Spacer(modifier = Modifier.height(Spacing.sm))
             Text(
@@ -112,7 +108,7 @@ fun SettingsScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
             )
         }
 
-        uiState.lastError?.let { error ->
+        llmError?.let { error ->
             Spacer(modifier = Modifier.height(Spacing.sm))
             ErrorBlock(text = error)
         }
@@ -135,8 +131,10 @@ fun SettingsScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
                 Text(
                     when {
                         uiState.isProcessing -> "読み込み中…"
-                        uiState.llmReady && loadedLlm?.id == selectedLlm?.id -> "読み込み直す"
-                        else -> "選択中モデルを読み込む"
+                        uiState.isLoadingLlmModel -> "読み込み中…"
+                        uiState.llmReady && loadedLlm?.id == selectedLlm?.id ->
+                            "${selectedLlm?.displayName ?: "このモデル"} を再読み込み"
+                        else -> "${selectedLlm?.displayName ?: "選択中モデル"} を読み込む"
                     }
                 )
             }
@@ -151,15 +149,6 @@ fun SettingsScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
             ) {
                 Text("モデルを解放")
             }
-        }
-
-        if (loadedLlm != null && selectedLlm != null && loadedLlm.id != selectedLlm.id) {
-            Spacer(modifier = Modifier.height(Spacing.sm))
-            Text(
-                text = "現在ロード中: ${loadedLlm.displayName} / 切替先: ${selectedLlm.displayName}",
-                style = MaterialTheme.typography.bodySmall,
-                color = TextSecondary
-            )
         }
 
         if (uiState.llmRuntimeInfo.isNotBlank()) {
@@ -208,7 +197,7 @@ fun SettingsScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
         Spacer(modifier = Modifier.height(Spacing.sm))
         StatusRow(
             ready = uiState.asrDebugState.isReady,
-            readyText = "Sherpa-ONNX SenseVoice をロード中",
+            readyText = "Sherpa-ONNX SenseVoice はロード済み",
             notReadyText = "Sherpa-ONNX SenseVoice は未ロード"
         )
 
@@ -224,6 +213,11 @@ fun SettingsScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
                 style = MaterialTheme.typography.bodyMedium,
                 color = TextSecondary
             )
+        }
+
+        asrError?.let { error ->
+            Spacer(modifier = Modifier.height(Spacing.sm))
+            ErrorBlock(text = error)
         }
 
         Spacer(modifier = Modifier.height(Spacing.md))
@@ -319,9 +313,13 @@ private fun LlmOptionCard(
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
+            RadioButton(
+                selected = isSelected,
+                onClick = onSelect
+            )
+            Spacer(modifier = Modifier.size(Spacing.sm))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = option.displayName,
@@ -335,6 +333,7 @@ private fun LlmOptionCard(
                     color = TextTertiary
                 )
             }
+            Spacer(modifier = Modifier.size(Spacing.sm))
             StatusRow(
                 ready = isLoaded,
                 readyText = "使用中",
@@ -415,6 +414,10 @@ private fun MonoBlock(text: String) {
             fontFamily = FontFamily.Monospace
         )
     }
+}
+
+private fun isAsrErrorMessage(message: String): Boolean {
+    return message.startsWith("ASR ", ignoreCase = true)
 }
 
 @Composable

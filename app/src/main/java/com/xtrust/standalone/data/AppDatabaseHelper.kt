@@ -72,6 +72,31 @@ class AppDatabaseHelper(context: Context) : SQLiteOpenHelper(
             )
             """.trimIndent()
         )
+
+        db.execSQL(
+            """
+            CREATE TABLE chat_threads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                llm_model TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+            """.trimIndent()
+        )
+
+        db.execSQL(
+            """
+            CREATE TABLE chat_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                thread_id INTEGER NOT NULL,
+                role TEXT NOT NULL,
+                text TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY(thread_id) REFERENCES chat_threads(id) ON DELETE CASCADE
+            )
+            """.trimIndent()
+        )
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -102,6 +127,31 @@ class AppDatabaseHelper(context: Context) : SQLiteOpenHelper(
                 "UPDATE sessions SET status = 'error' WHERE status = 'interrupted'"
             )
         }
+        if (oldVersion < 4) {
+            db.execSQL(
+                """
+                CREATE TABLE chat_threads (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title TEXT NOT NULL,
+                    llm_model TEXT,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                CREATE TABLE chat_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    thread_id INTEGER NOT NULL,
+                    role TEXT NOT NULL,
+                    text TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    FOREIGN KEY(thread_id) REFERENCES chat_threads(id) ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+        }
     }
 
     companion object {
@@ -111,6 +161,6 @@ class AppDatabaseHelper(context: Context) : SQLiteOpenHelper(
         }
 
         const val DATABASE_NAME = "xtrust-standalone.db"
-        const val DATABASE_VERSION = 3
+        const val DATABASE_VERSION = 4
     }
 }
