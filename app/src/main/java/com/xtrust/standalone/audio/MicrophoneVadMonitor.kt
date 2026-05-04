@@ -9,6 +9,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -26,7 +27,8 @@ class MicrophoneVadMonitor(
 
     suspend fun start(
         scope: CoroutineScope,
-        onFrame: (ShortArray, VadFrameResult) -> Unit
+        onFrame: (ShortArray, VadFrameResult) -> Unit,
+        onError: (Throwable) -> Unit = {}
     ) {
         if (monitorJob?.isActive == true) return
 
@@ -54,16 +56,21 @@ class MicrophoneVadMonitor(
 
         monitorJob = scope.launch(dispatcher) {
             val frameBuffer = ShortArray(frameSize)
-            while (isActive) {
-                val readCount = recorder.read(frameBuffer, 0, frameBuffer.size, AudioRecord.READ_BLOCKING)
-                if (readCount <= 0) continue
-                val frame = if (readCount == frameBuffer.size) {
-                    frameBuffer.copyOf()
-                } else {
-                    frameBuffer.copyOf(readCount)
+            try {
+                while (isActive) {
+                    val readCount = recorder.read(frameBuffer, 0, frameBuffer.size, AudioRecord.READ_BLOCKING)
+                    if (readCount <= 0) continue
+                    val frame = if (readCount == frameBuffer.size) {
+                        frameBuffer.copyOf()
+                    } else {
+                        frameBuffer.copyOf(readCount)
+                    }
+                    val result = vadEngine.processFrame(frame)
+                    onFrame(frame, result)
                 }
-                val result = vadEngine.processFrame(frame)
-                onFrame(frame, result)
+            } catch (t: Throwable) {
+                if (t is CancellationException) throw t
+                onError(t)
             }
         }
     }

@@ -3,6 +3,9 @@ package com.xtrust.standalone.data
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class AppDatabaseHelper(context: Context) : SQLiteOpenHelper(
     context,
@@ -21,9 +24,11 @@ class AppDatabaseHelper(context: Context) : SQLiteOpenHelper(
             """
             CREATE TABLE sessions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
                 started_at INTEGER NOT NULL,
                 ended_at INTEGER,
                 status TEXT NOT NULL,
+                error_message TEXT,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
             )
@@ -70,14 +75,45 @@ class AppDatabaseHelper(context: Context) : SQLiteOpenHelper(
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        db.execSQL("DROP TABLE IF EXISTS topics")
-        db.execSQL("DROP TABLE IF EXISTS cards")
-        db.execSQL("DROP TABLE IF EXISTS sessions")
-        onCreate(db)
+        var version = oldVersion
+        if (version < 2) {
+            db.execSQL("ALTER TABLE sessions ADD COLUMN title TEXT")
+            val updates = mutableListOf<Pair<Long, String>>()
+            db.rawQuery(
+                "SELECT id, started_at FROM sessions",
+                emptyArray()
+            ).use { cursor ->
+                while (cursor.moveToNext()) {
+                    val id = cursor.getLong(cursor.getColumnIndexOrThrow("id"))
+                    val startedAt = cursor.getLong(cursor.getColumnIndexOrThrow("started_at"))
+                    updates += id to buildSessionTitle(startedAt)
+                }
+            }
+            updates.forEach { (id, title) ->
+                db.execSQL(
+                    "UPDATE sessions SET title = ? WHERE id = ?",
+                    arrayOf<Any>(title, id)
+                )
+            }
+            db.execSQL("UPDATE sessions SET title = '議事録' WHERE title IS NULL")
+            version = 2
+        }
+        if (version < 3) {
+            db.execSQL("ALTER TABLE sessions ADD COLUMN error_message TEXT")
+            db.execSQL(
+                "UPDATE sessions SET status = 'error' WHERE status = 'interrupted'"
+            )
+            version = 3
+        }
     }
 
-    private companion object {
+    companion object {
+        fun buildSessionTitle(startedAt: Long): String {
+            val format = SimpleDateFormat("M月d日(E) HH時mm分", Locale.JAPAN)
+            return "${format.format(Date(startedAt))}の議事録"
+        }
+
         const val DATABASE_NAME = "xtrust-standalone.db"
-        const val DATABASE_VERSION = 1
+        const val DATABASE_VERSION = 3
     }
 }

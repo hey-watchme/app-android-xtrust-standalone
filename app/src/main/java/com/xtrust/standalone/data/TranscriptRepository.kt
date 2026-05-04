@@ -26,39 +26,55 @@ class TranscriptRepository(context: Context) {
         _sessions.value = loadSessionSummaries()
     }
 
-    suspend fun closeDanglingSessions(endedAt: Long) = withContext(Dispatchers.IO) {
-        val values = ContentValues().apply {
-            put("ended_at", endedAt)
-            put("status", STATUS_INTERRUPTED)
-            put("updated_at", endedAt)
+    suspend fun recoverDanglingSessions(endedAt: Long) = withContext(Dispatchers.IO) {
+        val db = dbHelper.writableDatabase
+        db.beginTransaction()
+        try {
+            db.execSQL(
+                """
+                DELETE FROM sessions
+                WHERE status = ? AND ended_at IS NULL
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM cards
+                    WHERE cards.session_id = sessions.id
+                  )
+                """.trimIndent(),
+                arrayOf<Any>(STATUS_RECORDING)
+            )
+            val values = ContentValues().apply {
+                put("ended_at", endedAt)
+                put("status", STATUS_COMPLETED)
+                putNull("error_message")
+                put("updated_at", endedAt)
+            }
+            db.update(
+                "sessions",
+                values,
+                "status = ? AND ended_at IS NULL",
+                arrayOf(STATUS_RECORDING)
+            )
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
         }
-        dbHelper.writableDatabase.update(
-            "sessions",
-            values,
-            "status = ? AND ended_at IS NULL",
-            arrayOf(STATUS_RECORDING)
-        )
         _sessions.value = loadSessionSummaries()
     }
 
-    suspend fun startSession(startedAt: Long): Long = withContext(Dispatchers.IO) {
-        val now = System.currentTimeMillis()
-        val values = ContentValues().apply {
-            put("started_at", startedAt)
-            putNull("ended_at")
-            put("status", STATUS_RECORDING)
-            put("created_at", now)
-            put("updated_at", now)
-        }
-        val sessionId = dbHelper.writableDatabase.insertOrThrow("sessions", null, values)
-        _sessions.value = loadSessionSummaries()
-        sessionId
-    }
-
-    suspend fun completeSession(sessionId: Long, endedAt: Long) = withContext(Dispatchers.IO) {
+    suspend fun finalizeSession(
+        sessionId: Long,
+        endedAt: Long,
+        status: String,
+        errorMessage: String? = null
+    ) = withContext(Dispatchers.IO) {
         val values = ContentValues().apply {
             put("ended_at", endedAt)
-            put("status", STATUS_COMPLETED)
+            put("status", status)
+            if (errorMessage.isNullOrBlank()) {
+                putNull("error_message")
+            } else {
+                put("error_message", errorMessage)
+            }
             put("updated_at", endedAt)
         }
         dbHelper.writableDatabase.update(
@@ -68,6 +84,54 @@ class TranscriptRepository(context: Context) {
             arrayOf(sessionId.toString())
         )
         _sessions.value = loadSessionSummaries()
+    }
+
+    suspend fun completeOrDeleteEmptySession(
+        sessionId: Long,
+        endedAt: Long
+    ) = withContext(Dispatchers.IO) {
+        if (hasCardsForSession(sessionId)) {
+            finalizeSession(sessionId, endedAt, STATUS_COMPLETED)
+        } else {
+            deleteSession(sessionId)
+        }
+    }
+
+    suspend fun failSession(
+        sessionId: Long,
+        endedAt: Long,
+        errorMessage: String
+    ) = withContext(Dispatchers.IO) {
+        finalizeSession(
+            sessionId = sessionId,
+            endedAt = endedAt,
+            status = STATUS_ERROR,
+            errorMessage = errorMessage
+        )
+    }
+
+    suspend fun startSession(startedAt: Long): Long = withContext(Dispatchers.IO) {
+        val now = System.currentTimeMillis()
+        val values = ContentValues().apply {
+            put("title", AppDatabaseHelper.buildSessionTitle(startedAt))
+            put("started_at", startedAt)
+            putNull("ended_at")
+            put("status", STATUS_RECORDING)
+            putNull("error_message")
+            put("created_at", now)
+            put("updated_at", now)
+        }
+        val sessionId = dbHelper.writableDatabase.insertOrThrow("sessions", null, values)
+        _sessions.value = loadSessionSummaries()
+        sessionId
+    }
+
+    suspend fun completeSession(sessionId: Long, endedAt: Long) = withContext(Dispatchers.IO) {
+        finalizeSession(sessionId, endedAt, STATUS_COMPLETED)
+    }
+
+    suspend fun discardSession(sessionId: Long) = withContext(Dispatchers.IO) {
+        deleteSession(sessionId)
     }
 
     suspend fun saveCard(card: CardEntity): Long = withContext(Dispatchers.IO) {
@@ -199,6 +263,7 @@ class TranscriptRepository(context: Context) {
             """
             SELECT
                 s.id,
+                s.title,
                 s.started_at,
                 s.ended_at,
                 s.status,
@@ -217,9 +282,11 @@ class TranscriptRepository(context: Context) {
                 sessions += RecordingSessionSummary(
                     session = RecordingSessionEntity(
                         id = cursor.getLong(cursor.getColumnIndexOrThrow("id")),
+                        title = cursor.getString(cursor.getColumnIndexOrThrow("title")),
                         startedAt = cursor.getLong(cursor.getColumnIndexOrThrow("started_at")),
                         endedAt = cursor.getLongOrNull("ended_at"),
                         status = cursor.getString(cursor.getColumnIndexOrThrow("status")),
+                        errorMessage = cursor.getStringOrNull("error_message"),
                         createdAt = cursor.getLong(cursor.getColumnIndexOrThrow("created_at")),
                         updatedAt = cursor.getLong(cursor.getColumnIndexOrThrow("updated_at"))
                     ),
@@ -241,14 +308,43 @@ class TranscriptRepository(context: Context) {
         return if (isNull(index)) null else getDouble(index)
     }
 
+    private fun android.database.Cursor.getStringOrNull(columnName: String): String? {
+        val index = getColumnIndexOrThrow(columnName)
+        return if (isNull(index)) null else getString(index)
+    }
+
     private fun android.database.Cursor.getIntOrZero(columnName: String): Int {
         val index = getColumnIndexOrThrow(columnName)
         return if (isNull(index)) 0 else getInt(index)
     }
 
+    private fun hasCardsForSession(sessionId: Long): Boolean {
+        return dbHelper.readableDatabase.rawQuery(
+            """
+            SELECT EXISTS(
+                SELECT 1
+                FROM cards
+                WHERE session_id = ?
+            )
+            """.trimIndent(),
+            arrayOf(sessionId.toString())
+        ).use { cursor ->
+            cursor.moveToFirst() && cursor.getInt(0) == 1
+        }
+    }
+
+    private fun deleteSession(sessionId: Long) {
+        dbHelper.writableDatabase.delete(
+            "sessions",
+            "id = ?",
+            arrayOf(sessionId.toString())
+        )
+        _sessions.value = loadSessionSummaries()
+    }
+
     companion object {
         const val STATUS_RECORDING = "recording"
         const val STATUS_COMPLETED = "completed"
-        const val STATUS_INTERRUPTED = "interrupted"
+        const val STATUS_ERROR = "error"
     }
 }

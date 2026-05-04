@@ -57,7 +57,7 @@
 - 録音セッション本体
 - `started_at`
 - `ended_at`
-- `status` (`recording` / `completed` / `interrupted`)
+- `status` (`recording` / `completed` / `error`)
 
 ### `cards`
 

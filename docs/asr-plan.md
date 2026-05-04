@@ -303,6 +303,45 @@ Future optional UI:
 - Packaging native libs and model assets may increase APK or installation
   complexity.
 
+## Current Tuning Note
+
+### Japanese spacing issue
+
+Current `sherpa-onnx` + `SenseVoice` output for Japanese sometimes contains
+unnatural spaces between short word or character units.
+
+Current assessment:
+
+- This does **not** look like a primary `utterance` / VAD segmentation problem.
+- Segmentation can cause sentence-level fragmentation, but it is less likely to
+  be the main cause of character-level or short-word spacing.
+- The more likely cause is ASR output formatting and missing Japanese-specific
+  post-processing after decode.
+- In the current app, `result.text` is almost passed through as-is except for
+  `trim()`, so any spacing produced by the recognizer is preserved.
+
+Likely causes to verify next:
+
+- `SenseVoice` / `sherpa-onnx` output characteristics for `cjkchar`-style
+  modeling units
+- Missing equivalent of SenseVoice rich transcription post-process
+- Need for Japanese-specific whitespace normalization on-device
+
+Recommended next fixes in order:
+
+1. Add a minimal Japanese whitespace cleanup step after ASR decode.
+2. Compare output before / after cleanup on several real recordings.
+3. Investigate whether SenseVoice post-processing can be reproduced in the
+   Android path.
+4. Only after that, revisit VAD / utterance tuning if sentence fragmentation
+   still harms readability.
+
+Success criteria for this subtask:
+
+- Japanese transcript no longer contains excessive internal spaces.
+- Cleanup does not collapse punctuation or mixed-language content incorrectly.
+- Readability improves without materially changing recognition latency.
+
 ## Immediate Next Tasks
 
 1. Benchmark official `sherpa-onnx` Android APKs on the target tablet.

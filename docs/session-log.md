@@ -157,7 +157,7 @@ engine.createConversation(ConversationConfig(
 - `Start VAD` 時に `recording` セッションを作成
 - `Stop VAD` 時にそのセッションを `completed` に更新
 - セグメント保存時に `cards` へ保存し、ASR 完了後に transcript / RTF / 推論時間を更新
-- アプリ再起動時には `recording` のまま残ったセッションを `interrupted` としてクローズ
+- アプリ再起動時には `recording` のまま残った空セッションは破棄し、発言があるセッションは `completed` に回復する
 
 ## 次のマイルストーン
 

@@ -27,6 +27,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
@@ -89,7 +90,7 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
     init {
         ensureKnownAsrDirs()
         viewModelScope.launch {
-            repository.closeDanglingSessions(System.currentTimeMillis())
+            repository.recoverDanglingSessions(System.currentTimeMillis())
             repository.refresh()
         }
         startMemoryMonitor()
@@ -312,8 +313,11 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
 
     fun startVadMonitoring() {
         viewModelScope.launch {
+            if (_uiState.value.vadDebugState.isListening || activeSessionId != null) return@launch
+
+            var sessionId: Long? = null
             try {
-                val sessionId = repository.startSession(System.currentTimeMillis())
+                sessionId = repository.startSession(System.currentTimeMillis())
                 activeSessionId = sessionId
                 _uiState.update {
                     it.copy(
@@ -325,10 +329,21 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
                         )
                     )
                 }
-                microphoneVadMonitor.start(viewModelScope) { frame, result ->
-                    processVadFrame(frame, result)
-                }
+                microphoneVadMonitor.start(
+                    scope = viewModelScope,
+                    onFrame = { frame, result ->
+                        processVadFrame(frame, result)
+                    },
+                    onError = { throwable ->
+                        handleMonitoringFailure(throwable)
+                    }
+                )
             } catch (e: Exception) {
+                val failedSessionId = sessionId
+                if (failedSessionId != null) {
+                    repository.discardSession(failedSessionId)
+                }
+                activeSessionId = null
                 _uiState.update {
                     it.copy(
                         lastError = "VAD start failed: ${e.message}",
@@ -341,10 +356,7 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
 
     fun stopVadMonitoring() {
         viewModelScope.launch {
-            microphoneVadMonitor.stop()
-            flushActiveSpeechSegment()
-            activeSessionId?.let { repository.completeSession(it, System.currentTimeMillis()) }
-            activeSessionId = null
+            completeActiveSession()
             _uiState.update {
                 it.copy(
                     vadDebugState = it.vadDebugState.copy(
@@ -356,33 +368,51 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun reportAudioPermissionDenied() {
-        _uiState.update { it.copy(lastError = "マイク権限が必要です。録音許可を有効にしてください。") }
+    private suspend fun completeActiveSession() {
+        val sessionId = activeSessionId
+        activeSessionId = null
+
+        microphoneVadMonitor.stop()
+        flushActiveSpeechSegment()
+
+        if (sessionId != null) {
+            repository.completeOrDeleteEmptySession(sessionId, System.currentTimeMillis())
+        }
     }
 
-    fun clearSavedSegments() {
-        synchronized(captureLock) {
-            preRollFrames.clear()
-            activeSpeechFrames.clear()
-        }
-        _uiState.update {
-            it.copy(
-                vadDebugState = it.vadDebugState.copy(
-                    detectedSegments = 0,
-                    lastSpeechDurationMs = 0,
-                    savedSegments = emptyList()
+    private fun handleMonitoringFailure(throwable: Throwable) {
+        viewModelScope.launch {
+            failActiveSession("録音処理エラー: ${throwable.message ?: throwable.javaClass.simpleName}")
+            _uiState.update {
+                it.copy(
+                    lastError = "VAD monitor failed: ${throwable.message}",
+                    vadDebugState = it.vadDebugState.copy(
+                        isListening = false,
+                        isSpeechDetected = false
+                    )
                 )
+            }
+        }
+    }
+
+    private suspend fun failActiveSession(errorMessage: String) {
+        val sessionId = activeSessionId
+        activeSessionId = null
+
+        microphoneVadMonitor.stop()
+        flushActiveSpeechSegment()
+
+        if (sessionId != null) {
+            repository.failSession(
+                sessionId = sessionId,
+                endedAt = System.currentTimeMillis(),
+                errorMessage = errorMessage
             )
         }
     }
 
-    fun transcribeSegment(segmentId: Long) {
-        val segment = _uiState.value.vadDebugState.savedSegments.firstOrNull { it.id == segmentId } ?: return
-        updateSegment(segmentId) { it.copy(isTranscribing = true, asrError = null) }
-
-        viewModelScope.launch {
-            transcribeSegmentInternal(segmentId, showErrors = true)
-        }
+    fun reportAudioPermissionDenied() {
+        _uiState.update { it.copy(lastError = "マイク権限が必要です。録音許可を有効にしてください。") }
     }
 
     private fun appendChatMessage(role: ChatRole, text: String) {
@@ -762,10 +792,10 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     override fun onCleared() {
-        super.onCleared()
-        viewModelScope.launch {
-            microphoneVadMonitor.stop()
+        runBlocking {
+            completeActiveSession()
         }
+        super.onCleared()
         asrEngine.close()
         llmEngine.close()
     }
