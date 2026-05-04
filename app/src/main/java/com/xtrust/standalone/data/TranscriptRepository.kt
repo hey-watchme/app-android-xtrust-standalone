@@ -267,6 +267,7 @@ class TranscriptRepository(context: Context) {
                 s.started_at,
                 s.ended_at,
                 s.status,
+                s.error_message,
                 s.created_at,
                 s.updated_at,
                 COUNT(c.id) AS segment_count,

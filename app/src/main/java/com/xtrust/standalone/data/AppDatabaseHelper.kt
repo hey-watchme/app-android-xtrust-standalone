@@ -75,8 +75,7 @@ class AppDatabaseHelper(context: Context) : SQLiteOpenHelper(
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        var version = oldVersion
-        if (version < 2) {
+        if (oldVersion < 2) {
             db.execSQL("ALTER TABLE sessions ADD COLUMN title TEXT")
             val updates = mutableListOf<Pair<Long, String>>()
             db.rawQuery(
@@ -96,14 +95,12 @@ class AppDatabaseHelper(context: Context) : SQLiteOpenHelper(
                 )
             }
             db.execSQL("UPDATE sessions SET title = '議事録' WHERE title IS NULL")
-            version = 2
         }
-        if (version < 3) {
+        if (oldVersion < 3) {
             db.execSQL("ALTER TABLE sessions ADD COLUMN error_message TEXT")
             db.execSQL(
                 "UPDATE sessions SET status = 'error' WHERE status = 'interrupted'"
             )
-            version = 3
         }
     }
 

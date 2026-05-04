@@ -39,20 +39,33 @@ class MicrophoneVadMonitor(
         )
         require(minBufferSize > 0) { "AudioRecord buffer initialization failed" }
 
-        val recorder = AudioRecord(
-            MediaRecorder.AudioSource.MIC,
-            sampleRate,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-            maxOf(minBufferSize, frameSize * 4)
-        )
+        val recorder = try {
+            AudioRecord(
+                MediaRecorder.AudioSource.MIC,
+                sampleRate,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                maxOf(minBufferSize, frameSize * 4)
+            )
+        } catch (e: SecurityException) {
+            // RECORD_AUDIO permission can be revoked; surface this to the caller.
+            onError(e)
+            return
+        }
         require(recorder.state == AudioRecord.STATE_INITIALIZED) {
             "AudioRecord is not initialized"
         }
 
         vadEngine.reset()
         audioRecord = recorder
-        recorder.startRecording()
+        try {
+            recorder.startRecording()
+        } catch (e: SecurityException) {
+            onError(e)
+            recorder.release()
+            audioRecord = null
+            return
+        }
 
         monitorJob = scope.launch(dispatcher) {
             val frameBuffer = ShortArray(frameSize)
