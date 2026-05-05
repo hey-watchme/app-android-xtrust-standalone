@@ -3,6 +3,7 @@
 #include <sampling.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <cmath>
 #include <iomanip>
 #include <sstream>
@@ -29,6 +30,7 @@ static llama_context *g_context = nullptr;
 static llama_batch g_batch = {};
 static common_chat_templates_ptr g_chat_templates;
 static common_sampler *g_sampler = nullptr;
+static std::atomic<bool> g_stop_flag{false};
 
 constexpr const char *ROLE_SYSTEM = "system";
 constexpr const char *ROLE_USER = "user";
@@ -339,6 +341,7 @@ Java_com_xtrust_bonsai_runtime_BonsaiNativeBridge_processSystemPrompt(JNIEnv *en
 extern "C"
 JNIEXPORT jint JNICALL
 Java_com_xtrust_bonsai_runtime_BonsaiNativeBridge_processUserPrompt(JNIEnv *env, jobject, jstring juser_prompt, jint n_predict) {
+    g_stop_flag.store(false);
     reset_short_term_states();
 
     const auto *user_prompt = env->GetStringUTFChars(juser_prompt, nullptr);
@@ -367,6 +370,9 @@ Java_com_xtrust_bonsai_runtime_BonsaiNativeBridge_processUserPrompt(JNIEnv *env,
 extern "C"
 JNIEXPORT jstring JNICALL
 Java_com_xtrust_bonsai_runtime_BonsaiNativeBridge_generateNextToken(JNIEnv *env, jobject) {
+    if (g_stop_flag.load()) {
+        return nullptr;
+    }
     if (current_position >= DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM) {
         shift_context();
     }
@@ -402,6 +408,12 @@ Java_com_xtrust_bonsai_runtime_BonsaiNativeBridge_generateNextToken(JNIEnv *env,
     jstring result = env->NewStringUTF(cached_token_chars.c_str());
     cached_token_chars.clear();
     return result;
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_xtrust_bonsai_runtime_BonsaiNativeBridge_cancelGeneration(JNIEnv *env, jobject obj) {
+    g_stop_flag.store(true);
 }
 
 extern "C"

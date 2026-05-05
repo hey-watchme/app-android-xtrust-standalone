@@ -465,6 +465,164 @@ class TranscriptRepository(context: Context) {
         _sessions.value = loadSessionSummaries()
     }
 
+    suspend fun enqueueWrapupJob(sessionId: Long, llmModel: String?): Long = withContext(Dispatchers.IO) {
+        val now = System.currentTimeMillis()
+        dbHelper.writableDatabase.delete("session_wrapup_jobs", "session_id = ?", arrayOf(sessionId.toString()))
+        val values = ContentValues().apply {
+            put("session_id", sessionId)
+            put("status", WrapupJobEntity.STATUS_PENDING)
+            putNull("current_step")
+            putNull("step_detail")
+            put("attempts", 0)
+            putNull("last_error")
+            if (llmModel != null) put("llm_model", llmModel) else putNull("llm_model")
+            put("enqueued_at", now)
+            putNull("started_at")
+            putNull("finished_at")
+        }
+        dbHelper.writableDatabase.insertOrThrow("session_wrapup_jobs", null, values)
+    }
+
+    suspend fun updateWrapupJobStep(
+        jobId: Long,
+        status: String,
+        step: String?,
+        detail: String?
+    ) = withContext(Dispatchers.IO) {
+        val values = ContentValues().apply {
+            put("status", status)
+            if (step != null) put("current_step", step) else putNull("current_step")
+            if (detail != null) put("step_detail", detail) else putNull("step_detail")
+            if (status == WrapupJobEntity.STATUS_RUNNING) {
+                put("started_at", System.currentTimeMillis())
+            }
+        }
+        dbHelper.writableDatabase.update("session_wrapup_jobs", values, "id = ?", arrayOf(jobId.toString()))
+    }
+
+    suspend fun failWrapupJob(jobId: Long, error: String) = withContext(Dispatchers.IO) {
+        val values = ContentValues().apply {
+            put("status", WrapupJobEntity.STATUS_FAILED)
+            put("last_error", error)
+            put("finished_at", System.currentTimeMillis())
+        }
+        dbHelper.writableDatabase.update("session_wrapup_jobs", values, "id = ?", arrayOf(jobId.toString()))
+    }
+
+    suspend fun completeWrapupJob(jobId: Long) = withContext(Dispatchers.IO) {
+        val values = ContentValues().apply {
+            put("status", WrapupJobEntity.STATUS_COMPLETED)
+            put("current_step", "done")
+            put("finished_at", System.currentTimeMillis())
+        }
+        dbHelper.writableDatabase.update("session_wrapup_jobs", values, "id = ?", arrayOf(jobId.toString()))
+    }
+
+    suspend fun cancelWrapupJob(jobId: Long) = withContext(Dispatchers.IO) {
+        val values = ContentValues().apply {
+            put("status", WrapupJobEntity.STATUS_CANCELED)
+            put("finished_at", System.currentTimeMillis())
+        }
+        dbHelper.writableDatabase.update("session_wrapup_jobs", values, "id = ?", arrayOf(jobId.toString()))
+    }
+
+    suspend fun loadPendingWrapupJobs(): List<WrapupJobEntity> = withContext(Dispatchers.IO) {
+        val jobs = mutableListOf<WrapupJobEntity>()
+        dbHelper.readableDatabase.rawQuery(
+            "SELECT * FROM session_wrapup_jobs WHERE status IN (?, ?) ORDER BY enqueued_at ASC",
+            arrayOf(WrapupJobEntity.STATUS_PENDING, WrapupJobEntity.STATUS_RUNNING)
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                jobs += WrapupJobEntity(
+                    id = cursor.getLong(cursor.getColumnIndexOrThrow("id")),
+                    sessionId = cursor.getLong(cursor.getColumnIndexOrThrow("session_id")),
+                    status = cursor.getString(cursor.getColumnIndexOrThrow("status")),
+                    currentStep = cursor.getStringOrNull("current_step"),
+                    stepDetail = cursor.getStringOrNull("step_detail"),
+                    attempts = cursor.getInt(cursor.getColumnIndexOrThrow("attempts")),
+                    lastError = cursor.getStringOrNull("last_error"),
+                    llmModel = cursor.getStringOrNull("llm_model"),
+                    enqueuedAt = cursor.getLong(cursor.getColumnIndexOrThrow("enqueued_at")),
+                    startedAt = cursor.getLongOrNull("started_at"),
+                    finishedAt = cursor.getLongOrNull("finished_at")
+                )
+            }
+        }
+        jobs
+    }
+
+    suspend fun saveSessionSummary(summary: SessionSummaryEntity) = withContext(Dispatchers.IO) {
+        val values = ContentValues().apply {
+            put("session_id", summary.sessionId)
+            if (summary.generatedTitle != null) put("generated_title", summary.generatedTitle) else putNull("generated_title")
+            if (summary.theme != null) put("theme", summary.theme) else putNull("theme")
+            if (summary.agendaJson != null) put("agenda_json", summary.agendaJson) else putNull("agenda_json")
+            if (summary.llmProvider != null) put("llm_provider", summary.llmProvider) else putNull("llm_provider")
+            if (summary.llmModel != null) put("llm_model", summary.llmModel) else putNull("llm_model")
+            put("generated_at", summary.generatedAt)
+        }
+        dbHelper.writableDatabase.insertWithOnConflict(
+            "session_summaries",
+            null,
+            values,
+            android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE
+        )
+    }
+
+    suspend fun loadSessionSummary(sessionId: Long): SessionSummaryEntity? = withContext(Dispatchers.IO) {
+        dbHelper.readableDatabase.rawQuery(
+            "SELECT * FROM session_summaries WHERE session_id = ?",
+            arrayOf(sessionId.toString())
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) return@withContext null
+            SessionSummaryEntity(
+                sessionId = cursor.getLong(cursor.getColumnIndexOrThrow("session_id")),
+                generatedTitle = cursor.getStringOrNull("generated_title"),
+                theme = cursor.getStringOrNull("theme"),
+                agendaJson = cursor.getStringOrNull("agenda_json"),
+                llmProvider = cursor.getStringOrNull("llm_provider"),
+                llmModel = cursor.getStringOrNull("llm_model"),
+                generatedAt = cursor.getLong(cursor.getColumnIndexOrThrow("generated_at"))
+            )
+        }
+    }
+
+    suspend fun loadWrapupJobForSession(sessionId: Long): WrapupJobEntity? = withContext(Dispatchers.IO) {
+        dbHelper.readableDatabase.rawQuery(
+            "SELECT * FROM session_wrapup_jobs WHERE session_id = ?",
+            arrayOf(sessionId.toString())
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) return@withContext null
+            WrapupJobEntity(
+                id = cursor.getLong(cursor.getColumnIndexOrThrow("id")),
+                sessionId = cursor.getLong(cursor.getColumnIndexOrThrow("session_id")),
+                status = cursor.getString(cursor.getColumnIndexOrThrow("status")),
+                currentStep = cursor.getStringOrNull("current_step"),
+                stepDetail = cursor.getStringOrNull("step_detail"),
+                attempts = cursor.getInt(cursor.getColumnIndexOrThrow("attempts")),
+                lastError = cursor.getStringOrNull("last_error"),
+                llmModel = cursor.getStringOrNull("llm_model"),
+                enqueuedAt = cursor.getLong(cursor.getColumnIndexOrThrow("enqueued_at")),
+                startedAt = cursor.getLongOrNull("started_at"),
+                finishedAt = cursor.getLongOrNull("finished_at")
+            )
+        }
+    }
+
+    suspend fun getSessionTranscript(sessionId: Long): String = withContext(Dispatchers.IO) {
+        val texts = mutableListOf<String>()
+        dbHelper.readableDatabase.rawQuery(
+            "SELECT transcript FROM cards WHERE session_id = ? AND transcript IS NOT NULL AND transcript != '' ORDER BY recorded_at ASC, id ASC",
+            arrayOf(sessionId.toString())
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                val text = cursor.getString(0)
+                if (!text.isNullOrBlank()) texts += text
+            }
+        }
+        texts.joinToString("\n")
+    }
+
     companion object {
         const val STATUS_RECORDING = "recording"
         const val STATUS_COMPLETED = "completed"

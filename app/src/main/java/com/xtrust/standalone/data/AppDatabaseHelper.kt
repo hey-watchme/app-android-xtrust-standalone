@@ -97,6 +97,40 @@ class AppDatabaseHelper(context: Context) : SQLiteOpenHelper(
             )
             """.trimIndent()
         )
+
+        db.execSQL(
+            """
+            CREATE TABLE session_wrapup_jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL UNIQUE,
+                status TEXT NOT NULL DEFAULT 'pending',
+                current_step TEXT,
+                step_detail TEXT,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT,
+                llm_model TEXT,
+                enqueued_at INTEGER NOT NULL,
+                started_at INTEGER,
+                finished_at INTEGER,
+                FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+            )
+            """.trimIndent()
+        )
+
+        db.execSQL(
+            """
+            CREATE TABLE session_summaries (
+                session_id INTEGER PRIMARY KEY,
+                generated_title TEXT,
+                theme TEXT,
+                agenda_json TEXT,
+                llm_provider TEXT,
+                llm_model TEXT,
+                generated_at INTEGER NOT NULL,
+                FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+            )
+            """.trimIndent()
+        )
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -152,6 +186,40 @@ class AppDatabaseHelper(context: Context) : SQLiteOpenHelper(
                 """.trimIndent()
             )
         }
+        if (oldVersion < 5) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS session_wrapup_jobs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id INTEGER NOT NULL UNIQUE,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    current_step TEXT,
+                    step_detail TEXT,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT,
+                    llm_model TEXT,
+                    enqueued_at INTEGER NOT NULL,
+                    started_at INTEGER,
+                    finished_at INTEGER,
+                    FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS session_summaries (
+                    session_id INTEGER PRIMARY KEY,
+                    generated_title TEXT,
+                    theme TEXT,
+                    agenda_json TEXT,
+                    llm_provider TEXT,
+                    llm_model TEXT,
+                    generated_at INTEGER NOT NULL,
+                    FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+        }
     }
 
     companion object {
@@ -161,6 +229,6 @@ class AppDatabaseHelper(context: Context) : SQLiteOpenHelper(
         }
 
         const val DATABASE_NAME = "xtrust-standalone.db"
-        const val DATABASE_VERSION = 4
+        const val DATABASE_VERSION = 5
     }
 }

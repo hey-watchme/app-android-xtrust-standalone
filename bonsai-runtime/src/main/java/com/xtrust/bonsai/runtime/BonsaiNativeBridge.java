@@ -131,4 +131,11 @@ public final class BonsaiNativeBridge implements AutoCloseable {
     private native String generateNextToken();
     private native void unload();
     private native void shutdown();
+    private native void cancelGeneration();
+
+    public synchronized void cancel() {
+        if (modelLoaded) {
+            cancelGeneration();
+        }
+    }
 }

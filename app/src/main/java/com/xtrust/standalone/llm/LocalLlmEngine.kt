@@ -5,6 +5,7 @@ interface LocalLlmEngine {
     suspend fun generate(prompt: String): String
     suspend fun sendChatMessage(message: String): String
     fun resetChat()
+    fun cancel() {}
     fun close()
     val isReady: Boolean
 }

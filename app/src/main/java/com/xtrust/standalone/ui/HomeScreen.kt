@@ -51,6 +51,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.xtrust.standalone.data.CardEntity
 import com.xtrust.standalone.data.RecordingSessionSummary
+import com.xtrust.standalone.data.WrapupJobEntity
 import com.xtrust.standalone.ui.theme.AccentOnPrimary
 import com.xtrust.standalone.ui.theme.AccentPrimary
 import com.xtrust.standalone.ui.theme.DividerStrong
@@ -154,7 +155,9 @@ fun HomeScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
                     item {
                         MinutesListCard(
                             sessions = sessions,
-                            onSelectSession = { sessionId -> selectedSessionId = sessionId }
+                            wrapupJobBySession = uiState.wrapupJobBySession,
+                            onSelectSession = { sessionId -> selectedSessionId = sessionId },
+                            onCancelWrapup = { sessionId -> viewModel.cancelWrapup(sessionId) }
                         )
                     }
                 }
@@ -304,7 +307,9 @@ private fun UtterancesCard(
 @Composable
 private fun MinutesListCard(
     sessions: List<RecordingSessionSummary>,
-    onSelectSession: (Long) -> Unit
+    wrapupJobBySession: Map<Long, WrapupJobEntity>,
+    onSelectSession: (Long) -> Unit,
+    onCancelWrapup: (Long) -> Unit
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -342,7 +347,9 @@ private fun MinutesListCard(
                     }
                     MinutesRow(
                         summary = summary,
-                        onClick = { onSelectSession(summary.session.id) }
+                        wrapupJob = wrapupJobBySession[summary.session.id],
+                        onClick = { onSelectSession(summary.session.id) },
+                        onCancelWrapup = { onCancelWrapup(summary.session.id) }
                     )
                 }
             }
@@ -353,7 +360,9 @@ private fun MinutesListCard(
 @Composable
 private fun MinutesRow(
     summary: RecordingSessionSummary,
-    onClick: () -> Unit
+    wrapupJob: WrapupJobEntity?,
+    onClick: () -> Unit,
+    onCancelWrapup: () -> Unit
 ) {
     val started = remember(summary.session.startedAt) {
         SimpleDateFormat("MM/dd HH:mm:ss", Locale.getDefault())
@@ -365,44 +374,102 @@ private fun MinutesRow(
         }
     } ?: "進行中"
 
+    val isWrapupActive = wrapupJob?.status in listOf(
+        WrapupJobEntity.STATUS_PENDING, WrapupJobEntity.STATUS_RUNNING
+    )
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(Radius.md))
+                .clickable(onClick = onClick)
+                .padding(horizontal = Spacing.sm, vertical = Spacing.md),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Outlined.Article,
+                contentDescription = null,
+                tint = TextTertiary,
+                modifier = Modifier.size(Spacing.lg)
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = summary.session.title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = TextPrimary
+                )
+                Text(
+                    text = "$started → $ended",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextTertiary,
+                    modifier = Modifier.padding(top = Spacing.xxs)
+                )
+                Text(
+                    text = "発言 ${summary.segmentCount}  ・  文字起こし ${summary.transcribedCount}  ・  ${buildSessionStatusText(summary.session.status)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextTertiary,
+                    modifier = Modifier.padding(top = Spacing.xxs)
+                )
+            }
+            if (isWrapupActive) {
+                androidx.compose.material3.IconButton(
+                    onClick = onCancelWrapup,
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Close,
+                        contentDescription = "要約をキャンセル",
+                        tint = TextSecondary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            } else {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                    contentDescription = "議事録を開く",
+                    tint = TextTertiary
+                )
+            }
+        }
+        if (wrapupJob != null) {
+            WrapupStatusBadge(job = wrapupJob)
+        }
+    }
+}
+
+@Composable
+private fun WrapupStatusBadge(job: WrapupJobEntity) {
+    val (label, color) = when (job.status) {
+        WrapupJobEntity.STATUS_PENDING -> "要約待ち" to TextTertiary
+        WrapupJobEntity.STATUS_RUNNING -> (job.stepDetail ?: "要約中…") to AccentPrimary
+        WrapupJobEntity.STATUS_COMPLETED -> "要約完了" to Color(0xFF22A06B)
+        WrapupJobEntity.STATUS_FAILED -> "要約失敗: ${job.lastError?.take(30)}" to StatusError
+        WrapupJobEntity.STATUS_CANCELED -> "キャンセル済み" to TextTertiary
+        else -> return
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(Radius.md))
-            .clickable(onClick = onClick)
-            .padding(horizontal = Spacing.sm, vertical = Spacing.md),
-        horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+            .padding(start = 40.dp, end = Spacing.sm, bottom = Spacing.sm),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(
-            imageVector = Icons.AutoMirrored.Outlined.Article,
-            contentDescription = null,
-            tint = TextTertiary,
-            modifier = Modifier.size(Spacing.lg)
-        )
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = summary.session.title,
-                style = MaterialTheme.typography.bodyMedium,
-                color = TextPrimary
-            )
-            Text(
-                text = "$started → $ended",
-                style = MaterialTheme.typography.bodySmall,
-                color = TextTertiary,
-                modifier = Modifier.padding(top = Spacing.xxs)
-            )
-            Text(
-                text = "発言 ${summary.segmentCount}  ・  文字起こし ${summary.transcribedCount}  ・  ${buildSessionStatusText(summary.session.status)}",
-                style = MaterialTheme.typography.labelSmall,
-                color = TextTertiary,
-                modifier = Modifier.padding(top = Spacing.xxs)
+        if (job.status == WrapupJobEntity.STATUS_RUNNING) {
+            Box(
+                modifier = Modifier
+                    .size(6.dp)
+                    .clip(CircleShape)
+                    .background(AccentPrimary)
             )
         }
-        Icon(
-            imageVector = Icons.AutoMirrored.Outlined.KeyboardArrowRight,
-            contentDescription = "議事録を開く",
-            tint = TextTertiary
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = color,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }

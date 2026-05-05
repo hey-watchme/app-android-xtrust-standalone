@@ -6,6 +6,7 @@ import android.os.Debug
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.xtrust.standalone.XtrustApplication
 import com.xtrust.standalone.audio.MicrophoneVadMonitor
 import com.xtrust.standalone.audio.WavFileWriter
 import com.xtrust.standalone.data.CardEntity
@@ -15,13 +16,16 @@ import com.xtrust.standalone.asr.SherpaOnnxAsrEngine
 import com.xtrust.standalone.data.ChatMessageEntity as StoredChatMessageEntity
 import com.xtrust.standalone.data.TopicEntity
 import com.xtrust.standalone.data.TranscriptRepository
+import com.xtrust.standalone.data.WrapupJobEntity
 import com.xtrust.standalone.llm.LlmDiagnostics
 import com.xtrust.standalone.llm.LocalLlmCatalog
 import com.xtrust.standalone.llm.LocalLlmDefinition
 import com.xtrust.standalone.llm.LocalLlmEngine
 import com.xtrust.standalone.vad.EnergyVadEngine
 import com.xtrust.standalone.vad.VadFrameResult
+import com.xtrust.standalone.wrapup.SessionWrapupService
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -51,6 +55,7 @@ data class UiState(
     val availableLlmOptions: List<LlmModelOption> = emptyList(),
     val isProcessing: Boolean = false,
     val lastError: String? = null,
+    val wrapupJobBySession: Map<Long, WrapupJobEntity> = emptyMap(),
     val llmRuntimeInfo: String = "",
     val llmBenchmarkResult: String? = null,
     val isRunningBenchmark: Boolean = false,
@@ -62,7 +67,11 @@ data class UiState(
 class XtrustViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository = TranscriptRepository(application.applicationContext)
-    private var llmEngine: LocalLlmEngine? = null
+    private val app get() = getApplication<XtrustApplication>()
+    private var llmEngine: LocalLlmEngine?
+        get() = app.llmEngine
+        set(value) { app.llmEngine = value }
+    private var wrapupPollingJob: Job? = null
     private val asrEngine: LocalAsrEngine = SherpaOnnxAsrEngine()
     private val vadEngine = EnergyVadEngine()
     private val microphoneVadMonitor = MicrophoneVadMonitor(vadEngine)
@@ -110,6 +119,7 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
             repository.recoverDanglingSessions(System.currentTimeMillis())
             repository.refresh()
             ensureChatThreadSelection()
+            resumePendingWrapupJobs()
         }
         startMemoryMonitor()
         autoLoadLlmModel()
@@ -190,8 +200,8 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun releaseCurrentLlmEngine() {
-        llmEngine?.close()
-        llmEngine = null
+        app.llmEngine?.close()
+        app.llmEngine = null
     }
 
     private fun clearLlmLoadedState(clearChat: Boolean, clearLastError: Boolean) {
@@ -587,7 +597,73 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
 
         if (sessionId != null) {
             repository.completeOrDeleteEmptySession(sessionId, System.currentTimeMillis())
+            enqueueWrapupJob(sessionId)
         }
+    }
+
+    private suspend fun enqueueWrapupJob(sessionId: Long) {
+        val transcript = repository.getSessionTranscript(sessionId)
+        if (transcript.isBlank()) return
+        val llmModel = loadedLlmDefinition()?.dbModel
+        val jobId = repository.enqueueWrapupJob(sessionId, llmModel)
+        SessionWrapupService.start(getApplication(), sessionId, jobId)
+        startWrapupPolling()
+    }
+
+    fun cancelWrapup(sessionId: Long) {
+        viewModelScope.launch {
+            val job = repository.loadWrapupJobForSession(sessionId)
+            if (job != null) {
+                repository.cancelWrapupJob(job.id)
+            }
+            SessionWrapupService.cancel(getApplication())
+            _uiState.update {
+                it.copy(wrapupJobBySession = it.wrapupJobBySession - sessionId)
+            }
+            wrapupPollingJob?.cancel()
+        }
+    }
+
+    fun retryWrapup(sessionId: Long) {
+        viewModelScope.launch {
+            enqueueWrapupJob(sessionId)
+        }
+    }
+
+    private fun startWrapupPolling() {
+        wrapupPollingJob?.cancel()
+        wrapupPollingJob = viewModelScope.launch {
+            while (isActive) {
+                val jobs = repository.loadPendingWrapupJobs()
+                if (jobs.isEmpty()) {
+                    refreshWrapupState()
+                    break
+                }
+                _uiState.update { state ->
+                    state.copy(wrapupJobBySession = jobs.associateBy { it.sessionId })
+                }
+                delay(2000)
+            }
+        }
+    }
+
+    private suspend fun refreshWrapupState() {
+        val jobs = repository.loadPendingWrapupJobs()
+        _uiState.update { state ->
+            state.copy(wrapupJobBySession = jobs.associateBy { it.sessionId })
+        }
+    }
+
+    private suspend fun resumePendingWrapupJobs() {
+        val pending = repository.loadPendingWrapupJobs()
+        if (pending.isEmpty()) return
+        _uiState.update { state ->
+            state.copy(wrapupJobBySession = pending.associateBy { it.sessionId })
+        }
+        pending.forEach { job ->
+            SessionWrapupService.start(getApplication(), job.sessionId, job.id)
+        }
+        startWrapupPolling()
     }
 
     private fun handleMonitoringFailure(throwable: Throwable) {
