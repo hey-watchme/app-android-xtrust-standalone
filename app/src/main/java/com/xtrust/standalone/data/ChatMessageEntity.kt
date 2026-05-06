@@ -5,5 +5,6 @@ data class ChatMessageEntity(
     val threadId: Long,
     val role: String,
     val text: String,
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    val responseMs: Long? = null
 )

@@ -368,6 +368,23 @@ adb shell chmod 777 /sdcard/Android/data/com.xtrust.standalone.gemma/files/model
 - `gemmaDebug`: `com.xtrust.standalone.gemma`
 - `bonsaiDebug`: `com.xtrust.standalone.bonsai`
 
+Android Studio の `Build Variants` では通常、次の 4 variant が見える。
+
+- `gemmaDebug`
+- `gemmaRelease`
+- `bonsaiDebug`
+- `bonsaiRelease`
+
+これは `flavor (gemma / bonsai) x build type (debug / release)` の組み合わせ。
+`bonsai` を試した後に `gemma` へ戻る場合も、単に `gemmaDebug` を選んで
+起動し直せばよい。片方を触ったことで、もう片方が自動で失われるわけではない。
+
+再導入が必要なのは次の場合だけ。
+
+- 対象 APK をアンインストールした
+- 対象 flavor のモデルファイルを削除した
+- 新端末に切り替えた
+
 例（Bonsai 8B 配置）:
 
 ```bash

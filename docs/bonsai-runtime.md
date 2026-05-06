@@ -23,6 +23,17 @@
   - default model path: `/sdcard/Android/data/com.xtrust.standalone.bonsai/files/models/Bonsai-8B.gguf`
   - fallback model path: `/sdcard/Android/data/com.xtrust.standalone.bonsai/files/models/Bonsai-1.7B-Q1_0.gguf`
 
+Android Studio の `Build Variants` では、通常は次の 4 variant が表示される。
+
+- `gemmaDebug`
+- `gemmaRelease`
+- `bonsaiDebug`
+- `bonsaiRelease`
+
+ここでの切り替えは runtime トグルではなく、`applicationIdSuffix` が異なる
+別アプリの選択である。したがって `bonsai` を検証した後でも、`gemmaDebug`
+を選んで起動すれば Gemma 側へ戻せる。両方を side-by-side で保持する前提。
+
 ## 取得物
 
 - Hugging Face model: `prism-ml/Bonsai-8B-gguf`

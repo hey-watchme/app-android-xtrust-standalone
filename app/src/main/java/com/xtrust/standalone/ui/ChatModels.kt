@@ -9,7 +9,8 @@ data class ChatMessage(
     val id: Long,
     val role: ChatRole,
     val text: String,
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    val responseMs: Long? = null
 )
 
 data class ChatThreadItem(

@@ -53,6 +53,10 @@ fun SettingsScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
     val selectedLlm = uiState.availableLlmOptions.firstOrNull { it.id == uiState.selectedLlmId }
     val loadedLlm = uiState.availableLlmOptions.firstOrNull { it.id == uiState.loadedLlmId }
     val selectedLlmFileName = selectedLlm?.modelPath?.substringAfterLast('/') ?: "model.litertlm"
+    val asrBaseDirPath = uiState.asrDebugState.modelDirPath.substringBeforeLast(
+        '/',
+        missingDelimiterValue = uiState.asrDebugState.modelDirPath
+    )
     val llmError = uiState.lastError?.takeUnless(::isAsrErrorMessage)
     val asrError = uiState.lastError?.takeIf(::isAsrErrorMessage)
 
@@ -236,13 +240,13 @@ fun SettingsScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
 
         Spacer(modifier = Modifier.height(Spacing.md))
         Text(
-            text = "上のディレクトリに次の 2 ファイルを配置してください。\n- model.int8.onnx\n- tokens.txt\n\n`files/asr/` 配下の既知 SenseVoice フォルダは自動検出します。`adb shell` で shell 所有フォルダに転送した場合は、次も実行してください。",
+            text = "上のディレクトリに次の 2 ファイルを配置してください。\n- model.int8.onnx\n- tokens.txt\n\nこのパスは現在起動中の flavor 専用です。`gemma` と `bonsai` では共有されません。`files/asr/` 配下の既知 SenseVoice フォルダは自動検出します。`adb shell` で shell 所有フォルダに転送した場合は、次も実行してください。",
             style = MaterialTheme.typography.bodyMedium,
             color = TextSecondary
         )
         Spacer(modifier = Modifier.height(Spacing.sm))
         MonoBlock(
-            text = "adb shell chmod 777 /sdcard/Android/data/com.xtrust.standalone/files/asr\n" +
+            text = "adb shell chmod 777 $asrBaseDirPath\n" +
                 "adb shell chmod 777 ${uiState.asrDebugState.modelDirPath}"
         )
 
@@ -337,7 +341,11 @@ private fun LlmOptionCard(
             StatusRow(
                 ready = isLoaded,
                 readyText = "使用中",
-                notReadyText = if (option.isLoadable) "待機中" else "準備中"
+                notReadyText = when {
+                    option.isLoadable && isSelected -> "選択中 / 未ロード"
+                    option.isLoadable -> "未ロード"
+                    else -> "準備中"
+                }
             )
         }
 

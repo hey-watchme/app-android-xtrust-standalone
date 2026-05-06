@@ -13,9 +13,40 @@ Current implementation status and restart notes are tracked in:
 - `docs/session-log.md`
 - `docs/asr-plan.md`
 
+## Validation Conclusion (2026-05-07)
+
+現時点の edge-device 検証は、いったんここまでとする。
+
+- 4GB RAM クラス端末では `Gemma 4 E2B` の常用は厳しい
+  - モデルロード自体は可能でも、端末全体のメモリ圧迫が強い
+  - swap 使用量が大きく、UI / IME / install まで重くなりやすい
+- `Bonsai` は 4GB 端末向け runtime としては成立するが、
+  `AI議事録` の wrap-up / summary 用途では思考力が不足する
+- したがって、この PoC の次の選択肢は次のいずれかになる
+  - より高メモリ・高性能な Android 端末へ乗り換える
+  - laptop / desktop を使うローカル版へ寄せる
+  - 当面は edge-only を見送り、クラウド API を使う構成へ戻す
+
+今回の結論としては、**この 4GB 端末では standalone local LLM 議事録の継続検証は
+優先度を下げる**。
+
+次の開発フェーズでは、この端末上では `ZeroTouch` 側へ戻し、**API ベースの議事録ツール**
+として継続実装する。
+
 ## Build Flavors (LLM runtime)
 
 この PoC は「同一 APK に複数ランタイム同梱」を避けるため、LLM runtime を build flavor で分離します（4GB 端末前提）。
+
+Android Studio の `Build Variants` では、次の 4 variant として見えます。
+
+- `gemmaDebug`
+- `gemmaRelease`
+- `bonsaiDebug`
+- `bonsaiRelease`
+
+意味としては `flavor (gemma / bonsai) x build type (debug / release)` です。
+ここで切り替えているのは「同じアプリの内部設定」ではなく、`applicationIdSuffix`
+が異なる **別アプリ** です。
 
 - `gemmaDebug`
   - `applicationId`: `com.xtrust.standalone.gemma`
@@ -35,6 +66,18 @@ Important: `gemma` / `bonsai` は **別アプリ** です（`applicationIdSuffix
 - ASR モデル配置（`files/asr/`）
 - LLM モデル配置（`files/models/`）
 - 収録 wav（`files/audio-segments/`）
+
+ただし、これは「どちらか片方しか使えない」という意味ではありません。
+`gemma` と `bonsai` は side-by-side でインストール・起動できます。
+
+- `bonsai` を試した後に `gemma` へ戻す
+  - Android Studio なら `Build Variants` で `gemmaDebug` を選んで Run
+  - adb なら `app-gemma-debug.apk` を install して `xtrust Gemma` を起動
+- `gemma` を使った後に `bonsai` へ戻す
+  - 同様に `bonsaiDebug` を選んで Run
+
+切り替え時に必要なのは「対象 flavor の APK」と「その flavor 用のモデルファイル」です。
+もう片方のアプリやモデルを消さない限り、再導入は不要です。
 
 ビルド:
 

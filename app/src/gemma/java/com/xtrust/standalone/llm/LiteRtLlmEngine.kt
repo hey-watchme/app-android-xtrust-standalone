@@ -1,12 +1,12 @@
 package com.xtrust.standalone.llm
 
-import android.util.Log
 import com.google.ai.edge.litertlm.Backend
 import com.google.ai.edge.litertlm.Conversation
 import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.Contents
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
+import com.xtrust.standalone.util.AppLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -18,49 +18,77 @@ class LiteRtLlmEngine : LocalLlmEngine {
 
     private var engine: Engine? = null
     private var chatConversation: Conversation? = null
+    private val sessionLock = Any()
     override var isReady: Boolean = false
         private set
 
     override suspend fun initialize(modelPath: String): Unit = withContext(Dispatchers.IO) {
-        chatConversation?.close()
-        engine?.close()
-        Log.d(TAG, "Loading model from $modelPath")
-        val config = EngineConfig(
-            modelPath = modelPath,
-            backend = Backend.CPU()
-        )
-        val loadedEngine = Engine(config)
-        loadedEngine.initialize()
-        engine = loadedEngine
-        chatConversation = createConversation(loadedEngine)
-        isReady = true
-        Log.d(TAG, "Engine ready")
+        synchronized(sessionLock) {
+            chatConversation?.close()
+            chatConversation = null
+            engine?.close()
+            engine = null
+            isReady = false
+
+            AppLog.d(TAG, "Loading model from $modelPath")
+            val config = EngineConfig(
+                modelPath = modelPath,
+                backend = Backend.CPU()
+            )
+            val loadedEngine = Engine(config)
+            loadedEngine.initialize()
+            engine = loadedEngine
+            chatConversation = createConversation(loadedEngine)
+            isReady = true
+            AppLog.d(TAG, "Engine ready")
+        }
     }
 
     override suspend fun generate(prompt: String): String = withContext(Dispatchers.IO) {
-        val loadedEngine = checkNotNull(engine) { "Engine not initialized" }
-        loadedEngine.createConversation(createConversationConfig()).use { conversation ->
-            renderResponse(conversation, prompt)
+        synchronized(sessionLock) {
+            val loadedEngine = checkNotNull(engine) { "Engine not initialized" }
+            val previousConversation = chatConversation
+            previousConversation?.close()
+            chatConversation = null
+
+            try {
+                loadedEngine.createConversation(createConversationConfig()).use { conversation ->
+                    renderResponse(conversation, prompt)
+                }
+            } finally {
+                if (engine === loadedEngine && isReady) {
+                    chatConversation = createConversation(loadedEngine)
+                }
+            }
         }
     }
 
     override suspend fun sendChatMessage(message: String): String = withContext(Dispatchers.IO) {
-        val conversation = checkNotNull(chatConversation) { "Chat not initialized" }
-        renderResponse(conversation, message)
+        synchronized(sessionLock) {
+            val loadedEngine = checkNotNull(engine) { "Engine not initialized" }
+            val conversation = chatConversation ?: createConversation(loadedEngine).also {
+                chatConversation = it
+            }
+            renderResponse(conversation, message)
+        }
     }
 
     override fun resetChat() {
-        val loadedEngine = engine ?: return
-        chatConversation?.close()
-        chatConversation = createConversation(loadedEngine)
+        synchronized(sessionLock) {
+            val loadedEngine = engine ?: return
+            chatConversation?.close()
+            chatConversation = createConversation(loadedEngine)
+        }
     }
 
     override fun close() {
-        chatConversation?.close()
-        chatConversation = null
-        engine?.close()
-        engine = null
-        isReady = false
+        synchronized(sessionLock) {
+            chatConversation?.close()
+            chatConversation = null
+            engine?.close()
+            engine = null
+            isReady = false
+        }
     }
 
     private fun createConversation(engine: Engine): Conversation {

@@ -3,7 +3,6 @@ package com.xtrust.standalone.ui
 import android.app.ActivityManager
 import android.app.Application
 import android.os.Debug
-import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.xtrust.standalone.XtrustApplication
@@ -22,6 +21,7 @@ import com.xtrust.standalone.llm.LlmDiagnostics
 import com.xtrust.standalone.llm.LocalLlmCatalog
 import com.xtrust.standalone.llm.LocalLlmDefinition
 import com.xtrust.standalone.llm.LocalLlmEngine
+import com.xtrust.standalone.util.AppLog
 import com.xtrust.standalone.vad.ThresholdVadEngine
 import com.xtrust.standalone.vad.VadFrameResult
 import kotlinx.coroutines.CancellationException
@@ -59,6 +59,8 @@ data class UiState(
     val selectedLlmId: String = "",
     val loadedLlmId: String? = null,
     val selectedChatThreadId: Long? = null,
+    val isGeneratingChatResponse: Boolean = false,
+    val chatResponseStartedAt: Long? = null,
     val chatThreads: List<ChatThreadItem> = emptyList(),
     val availableLlmOptions: List<LlmModelOption> = emptyList(),
     val isProcessing: Boolean = false,
@@ -142,7 +144,7 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
             resumePendingWrapupJobs()
             schedulePendingTranscriptions()
         }
-        startMemoryMonitor()
+        refreshMemorySnapshot()
         autoLoadLlmModel()
         autoLoadAsrModel()
     }
@@ -272,7 +274,7 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
             }
 
             val file = File(definition.modelPath)
-            Log.d("XtrustVM", "checking path: ${definition.modelPath} exists=${file.exists()} size=${file.length()}")
+            AppLog.d("XtrustVM", "checking path: ${definition.modelPath} exists=${file.exists()} size=${file.length()}")
             when {
                 !file.exists() ->
                     _uiState.update {
@@ -495,6 +497,8 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
                 )
                 repository.saveTopic(topic)
             } finally {
+                activeRuntimeThreadId = null
+                runtimeNeedsBootstrap = true
                 _uiState.update { it.copy(isProcessing = false) }
                 refreshMemorySnapshot()
             }
@@ -512,7 +516,14 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         viewModelScope.launch {
-            _uiState.update { it.copy(isProcessing = true, lastError = null) }
+            _uiState.update {
+                it.copy(
+                    isProcessing = true,
+                    isGeneratingChatResponse = true,
+                    chatResponseStartedAt = System.currentTimeMillis(),
+                    lastError = null
+                )
+            }
             try {
                 val threadId = ensureSelectedChatThreadId()
                 val existingMessages = repository.loadChatMessages(threadId)
@@ -522,22 +533,37 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
                     repository.updateChatThreadTitle(threadId, buildChatThreadTitle(trimmed))
                 }
                 syncChatThreadState(threadId)
+                val generationStartedAt = System.currentTimeMillis()
                 val reply = if (shouldBootstrapThread(threadId) && existingMessages.isNotEmpty()) {
-                    engine.generate(buildChatPrompt(_chatMessages.value))
+                    engine.resetChat()
+                    engine.sendChatMessage(buildChatPrompt(_chatMessages.value))
                 } else {
                     if (activeRuntimeThreadId != threadId) {
                         engine.resetChat()
                     }
                     engine.sendChatMessage(trimmed)
                 }
-                repository.saveChatMessage(threadId, CHAT_ROLE_ASSISTANT, reply, loadedModel)
+                val responseMs = System.currentTimeMillis() - generationStartedAt
+                repository.saveChatMessage(
+                    threadId = threadId,
+                    role = CHAT_ROLE_ASSISTANT,
+                    text = reply,
+                    llmModel = loadedModel,
+                    responseMs = responseMs
+                )
                 activeRuntimeThreadId = threadId
                 runtimeNeedsBootstrap = false
                 syncChatThreadState(threadId)
             } catch (e: Exception) {
                 _uiState.update { it.copy(lastError = "チャット失敗: ${e.message}") }
             } finally {
-                _uiState.update { it.copy(isProcessing = false) }
+                _uiState.update {
+                    it.copy(
+                        isProcessing = false,
+                        isGeneratingChatResponse = false,
+                        chatResponseStartedAt = null
+                    )
+                }
                 refreshMemorySnapshot()
             }
         }
@@ -653,7 +679,7 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
     fun wrapupInProcess(sessionId: Long) {
         synchronized(wrapupJobLock) {
             if (activeWrapupJobs[sessionId]?.isActive == true) {
-                Log.d("XtrustVM", "Wrapup already running for session=$sessionId")
+                AppLog.d("XtrustVM", "Wrapup already running for session=$sessionId")
                 return
             }
             activeWrapupJobs[sessionId] = wrapupScope.launch {
@@ -699,19 +725,21 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
 
             val rawOutput = try {
                 app.llmMutex.withLock {
-                    Log.d("XtrustVM", "Wrapup start: transcript_len=${transcript.length}")
+                    AppLog.d("XtrustVM", "Wrapup start: transcript_len=${transcript.length}")
                     withTimeoutOrNull(WRAPUP_TIMEOUT_MS) {
                         engine.generate(buildWrapupPrompt(transcript))
                     }.also {
-                        Log.d("XtrustVM", "Wrapup done: ${it?.take(300) ?: "NULL(timeout)"}")
+                        AppLog.d("XtrustVM", "Wrapup done: ${it?.take(300) ?: "NULL(timeout)"}")
                     }
                 }
             } finally {
                 tickJob.cancelAndJoin()
+                activeRuntimeThreadId = null
+                runtimeNeedsBootstrap = true
             }
 
             if (rawOutput == null) {
-                Log.e("XtrustVM", "Wrapup timeout after ${WRAPUP_TIMEOUT_MS / 1000}s")
+                AppLog.e("XtrustVM", "Wrapup timeout after ${WRAPUP_TIMEOUT_MS / 1000}s")
                 repository.failWrapupJob(jobId, "タイムアウト (${WRAPUP_TIMEOUT_MS / 60_000}分)")
                 refreshWrapupState()
                 return
@@ -731,9 +759,9 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
                     )
                 )
                 repository.completeWrapupJob(jobId)
-                Log.d("XtrustVM", "Wrapup saved: title=$title")
+                AppLog.d("XtrustVM", "Wrapup saved: title=$title")
             } catch (e: Exception) {
-                Log.e("XtrustVM", "Wrapup save failed", e)
+                AppLog.e("XtrustVM", "Wrapup save failed", e)
                 repository.failWrapupJob(jobId, e.message ?: "保存エラー")
             }
             refreshWrapupState()
@@ -770,7 +798,7 @@ $truncated"""
             val s = raw.indexOf('{')
             val e = raw.lastIndexOf('}')
             if (s < 0 || e < 0) {
-                Log.w("XtrustVM", "No JSON braces in wrapup output: ${raw.take(200)}")
+                AppLog.w("XtrustVM", "No JSON braces in wrapup output: ${raw.take(200)}")
                 return Triple(null, raw.take(80).ifBlank { null }, null)
             }
             val json = JSONObject(raw.substring(s, e + 1))
@@ -779,7 +807,7 @@ $truncated"""
             val agenda = json.optJSONArray("agenda") ?: JSONArray()
             Triple(title, theme, agenda.toString())
         } catch (ex: Exception) {
-            Log.w("XtrustVM", "Wrapup JSON parse failed: ${ex.message}  raw=${raw.take(200)}")
+            AppLog.w("XtrustVM", "Wrapup JSON parse failed: ${ex.message}  raw=${raw.take(200)}")
             Triple(null, raw.take(80).ifBlank { null }, null)
         }
     }
@@ -822,7 +850,7 @@ $truncated"""
     private suspend fun resumePendingWrapupJobs() {
         val staleJobs = repository.loadPendingWrapupJobs()
         if (staleJobs.isNotEmpty()) {
-            Log.w("XtrustVM", "Marking ${staleJobs.size} stale wrapup job(s) as failed on startup")
+            AppLog.w("XtrustVM", "Marking ${staleJobs.size} stale wrapup job(s) as failed on startup")
         }
         staleJobs.forEach { job ->
             repository.failWrapupJob(
@@ -868,15 +896,6 @@ $truncated"""
 
     fun reportAudioPermissionDenied() {
         _uiState.update { it.copy(lastError = "マイク権限が必要です。録音許可を有効にしてください。") }
-    }
-
-    private fun startMemoryMonitor() {
-        viewModelScope.launch {
-            while (isActive) {
-                refreshMemorySnapshot()
-                delay(1500)
-            }
-        }
     }
 
     private fun refreshMemorySnapshot() {
@@ -972,7 +991,8 @@ $truncated"""
             id = message.id,
             role = if (message.role == CHAT_ROLE_USER) ChatRole.User else ChatRole.Assistant,
             text = message.text,
-            createdAt = message.createdAt
+            createdAt = message.createdAt,
+            responseMs = message.responseMs
         )
     }
 
@@ -1194,11 +1214,11 @@ $truncated"""
 
             val startedAt = System.currentTimeMillis()
             try {
-                Log.d("XtrustVM", "ASR start: cardId=$segmentId file=${card.audioPath}")
+                AppLog.d("XtrustVM", "ASR start: cardId=$segmentId file=${card.audioPath}")
                 val transcript = try {
                     asrEngine.transcribe(card.audioPath)
                 } catch (firstError: Exception) {
-                    Log.w("XtrustVM", "ASR first attempt failed, trying engine recovery for cardId=$segmentId", firstError)
+                    AppLog.w("XtrustVM", "ASR first attempt failed, trying engine recovery for cardId=$segmentId", firstError)
                     if (!recoverAsrEngine()) throw firstError
                     asrEngine.transcribe(card.audioPath)
                 }
@@ -1242,10 +1262,10 @@ $truncated"""
                     )
                 }
                 refreshMemorySnapshot()
-                Log.d("XtrustVM", "ASR done: cardId=$segmentId elapsedMs=$elapsedMs text=${transcript.text.take(80)}")
+                AppLog.d("XtrustVM", "ASR done: cardId=$segmentId elapsedMs=$elapsedMs text=${transcript.text.take(80)}")
                 return true
             } catch (e: Exception) {
-                Log.e("XtrustVM", "ASR failed: cardId=$segmentId file=${card.audioPath}", e)
+                AppLog.e("XtrustVM", "ASR failed: cardId=$segmentId file=${card.audioPath}", e)
                 val elapsedMs = System.currentTimeMillis() - startedAt
                 val errorMessage = e.message ?: "Unknown ASR error"
                 repository.markCardTranscriptionFailed(segmentId, errorMessage, elapsedMs)
@@ -1283,7 +1303,7 @@ $truncated"""
             }
             true
         } catch (recoveryError: Exception) {
-            Log.e("XtrustVM", "ASR recovery failed", recoveryError)
+            AppLog.e("XtrustVM", "ASR recovery failed", recoveryError)
             _uiState.update {
                 it.copy(
                     asrDebugState = it.asrDebugState.copy(

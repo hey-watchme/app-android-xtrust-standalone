@@ -1,6 +1,14 @@
 # Android Standalone — 現在地と次マイルストーン
 
-最終更新: 2026-05-05
+最終更新: 2026-05-07
+
+## 検証結論（2026-05-07）
+
+- 4GB RAM クラス端末での `Gemma 4 E2B` 常用は厳しい
+- `Bonsai` は runtime としては成立するが、AI議事録 wrap-up 用の思考力が不足する
+- この端末での edge-only 検証は、いったんここまでとする
+- 次は `ZeroTouch` 側へ戻し、この端末では API ベース議事録ツールとして進める
+- standalone local LLM の次回検証は、高性能 Android 端末または laptop / desktop 前提で再開する
 
 ## 現在できること
 
@@ -24,10 +32,11 @@
 
 ## ここまでの学び
 
-### 1. edge-only は成立する
+### 1. 技術検証としては成立した
 
-- 4GB クラス端末でも `Gemma 4 E2B` と `SenseVoice int8` の両方が動く
-- 快適ではないが、PoC としての成立性は確認できた
+- `Gemma 4 E2B` と `SenseVoice int8` の組み合わせ自体は 4GB クラス端末でも動作確認できた
+- ただし常用には向かず、swap 圧迫と UI 劣化が強く出る
+- `Bonsai` は runtime としては軽いが、AI議事録 wrap-up の品質には不足がある
 
 ### 2. 先に縦串を通す方が正しい
 
@@ -91,6 +100,23 @@
 - `files/asr/`（ASR）
 - `files/audio-segments/`（録音 wav）
 
+ただし、運用としては排他的ではない。
+Android Studio の `Build Variants` では次の 4 つが見える。
+
+- `gemmaDebug`
+- `gemmaRelease`
+- `bonsaiDebug`
+- `bonsaiRelease`
+
+これは `flavor x build type` の組み合わせであり、`gemma` と `bonsai` を
+side-by-side で持てる構成である。
+
+- `gemma` に戻したいときは `gemmaDebug` を選んで起動すればよい
+- `bonsai` に戻したいときは `bonsaiDebug` を選んで起動すればよい
+
+再セットアップが必要なのは、対象 flavor の APK またはモデルファイルを
+消した場合だけである。
+
 ## 既知の制約
 
 - ASR は `CPU` 実行で速くはない
@@ -101,16 +127,12 @@
 
 ## 次のマイルストーン
 
-`セッション要約` 実装済み（2026-05-05）。詳細は `docs/session-wrapup.md` 参照。
+この 4GB 端末での standalone local LLM 検証は、いったん停止する。
 
-次は **検証と品質確認**:
+次は `ZeroTouch` 側へ戻し、**API ベース議事録ツール** として実装を進める。
 
-- 実機で Stop VAD → 要約完了までの一連フローを動かす
-- 処理時間・品質・通知動作を確認する
-- 失敗ケース（LLM 未ロード・transcript 短すぎ）を確認する
+standalone local LLM を再開する場合の前提は次のいずれか。
 
-その後、追加候補:
-
-- Home セッション詳細ドロワーに要約（title / theme / agenda）を表示
-- 要約失敗時の再試行ボタン
+- より高メモリ・高性能な Android 端末へ移行する
+- laptop / desktop を使うローカル版として再構成する
 - Phase 2: タスク抽出（誰が・何を）

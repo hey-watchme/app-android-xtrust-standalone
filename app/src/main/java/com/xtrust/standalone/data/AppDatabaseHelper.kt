@@ -92,6 +92,7 @@ class AppDatabaseHelper(context: Context) : SQLiteOpenHelper(
                 thread_id INTEGER NOT NULL,
                 role TEXT NOT NULL,
                 text TEXT NOT NULL,
+                response_ms INTEGER,
                 created_at INTEGER NOT NULL,
                 FOREIGN KEY(thread_id) REFERENCES chat_threads(id) ON DELETE CASCADE
             )
@@ -220,6 +221,9 @@ class AppDatabaseHelper(context: Context) : SQLiteOpenHelper(
                 """.trimIndent()
             )
         }
+        if (oldVersion < 6) {
+            db.execSQL("ALTER TABLE chat_messages ADD COLUMN response_ms INTEGER")
+        }
     }
 
     companion object {
@@ -229,6 +233,6 @@ class AppDatabaseHelper(context: Context) : SQLiteOpenHelper(
         }
 
         const val DATABASE_NAME = "xtrust-standalone.db"
-        const val DATABASE_VERSION = 5
+        const val DATABASE_VERSION = 6
     }
 }

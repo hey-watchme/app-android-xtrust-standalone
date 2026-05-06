@@ -18,7 +18,7 @@ class ThresholdVadEngine(
     private val maxHoldZcr: Float = 0.30f,
     private val noiseFloorDecay: Float = 0.997f,
     private val startConfirmationFrames: Int = 3,
-    private val silenceSplitFrames: Int = 15
+    private val silenceSplitFrames: Int = 120
 ) : LocalVadEngine {
 
     val engineLabel: String = "Threshold VAD"

@@ -331,7 +331,8 @@ class TranscriptRepository(context: Context) {
         threadId: Long,
         role: String,
         text: String,
-        llmModel: String?
+        llmModel: String?,
+        responseMs: Long? = null
     ): Long = withContext(Dispatchers.IO) {
         val now = System.currentTimeMillis()
         val db = dbHelper.writableDatabase
@@ -339,6 +340,11 @@ class TranscriptRepository(context: Context) {
             put("thread_id", threadId)
             put("role", role)
             put("text", text)
+            if (responseMs == null) {
+                putNull("response_ms")
+            } else {
+                put("response_ms", responseMs)
+            }
             put("created_at", now)
         }
         val messageId = db.insertOrThrow("chat_messages", null, messageValues)
@@ -505,7 +511,8 @@ class TranscriptRepository(context: Context) {
                     threadId = cursor.getLong(cursor.getColumnIndexOrThrow("thread_id")),
                     role = cursor.getString(cursor.getColumnIndexOrThrow("role")),
                     text = cursor.getString(cursor.getColumnIndexOrThrow("text")),
-                    createdAt = cursor.getLong(cursor.getColumnIndexOrThrow("created_at"))
+                    createdAt = cursor.getLong(cursor.getColumnIndexOrThrow("created_at")),
+                    responseMs = cursor.getLongOrNull("response_ms")
                 )
             }
         }

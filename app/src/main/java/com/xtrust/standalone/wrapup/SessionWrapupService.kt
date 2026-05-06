@@ -4,11 +4,11 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.os.IBinder
-import android.util.Log
 import com.xtrust.standalone.XtrustApplication
 import com.xtrust.standalone.data.SessionSummaryEntity
 import com.xtrust.standalone.data.TranscriptRepository
 import com.xtrust.standalone.data.WrapupJobEntity
+import com.xtrust.standalone.util.AppLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -116,18 +116,18 @@ class SessionWrapupService : Service() {
             var summaryJson: String? = null
             try {
                 app.llmMutex.withLock {
-                    Log.d(TAG, "LLM generate start. transcript_len=${transcript.length}")
+                    AppLog.d(TAG, "LLM generate start. transcript_len=${transcript.length}")
                     summaryJson = withTimeoutOrNull(WRAPUP_TIMEOUT_MS) {
                         engine.generate(buildPrompt(transcript))
                     }
-                    Log.d(TAG, "LLM generate done. result=${summaryJson?.take(300) ?: "NULL(timeout)"}")
+                    AppLog.d(TAG, "LLM generate done. result=${summaryJson?.take(300) ?: "NULL(timeout)"}")
                 }
             } finally {
                 tickJob.cancel()
             }
 
             if (summaryJson == null) {
-                Log.e(TAG, "Wrapup timed out after ${WRAPUP_TIMEOUT_MS / 1000}s for session=$sessionId")
+                AppLog.e(TAG, "Wrapup timed out after ${WRAPUP_TIMEOUT_MS / 1000}s for session=$sessionId")
                 finish(jobId, error = "タイムアウト (${WRAPUP_TIMEOUT_MS / 60_000}分)")
                 return
             }
@@ -155,7 +155,7 @@ class SessionWrapupService : Service() {
             stopSelf()
 
         } catch (e: Exception) {
-            Log.e(TAG, "wrapup failed for session=$sessionId", e)
+            AppLog.e(TAG, "wrapup failed for session=$sessionId", e)
             finish(jobId, error = e.message ?: "不明なエラー")
         }
     }
@@ -198,19 +198,19 @@ $truncated
             val s = raw.indexOf('{')
             val e = raw.lastIndexOf('}')
             if (s < 0 || e < 0) {
-                Log.w(TAG, "No JSON braces found in LLM output: ${raw.take(200)}")
+                AppLog.w(TAG, "No JSON braces found in LLM output: ${raw.take(200)}")
                 return Triple(null, raw.take(80).ifBlank { null }, null)
             }
             val jsonStr = raw.substring(s, e + 1)
-            Log.d(TAG, "Parsed JSON candidate: $jsonStr")
+            AppLog.d(TAG, "Parsed JSON candidate: $jsonStr")
             val json = JSONObject(jsonStr)
             val title = json.optString("title").ifBlank { null }
             val theme = json.optString("theme").ifBlank { null }
             val agenda = json.optJSONArray("agenda") ?: JSONArray()
-            Log.d(TAG, "Summary OK — title=$title theme=$theme agenda=$agenda")
+            AppLog.d(TAG, "Summary OK — title=$title theme=$theme agenda=$agenda")
             Triple(title, theme, agenda.toString())
         } catch (ex: Exception) {
-            Log.w(TAG, "JSON parse failed: ${ex.message}  raw=${raw.take(200)}")
+            AppLog.w(TAG, "JSON parse failed: ${ex.message}  raw=${raw.take(200)}")
             Triple(null, raw.take(80).ifBlank { null }, null)
         }
     }

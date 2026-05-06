@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -30,14 +29,13 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -46,6 +44,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 import com.xtrust.standalone.ui.theme.AccentOnPrimary
 import com.xtrust.standalone.ui.theme.AccentPrimary
 import com.xtrust.standalone.ui.theme.DividerStrong
@@ -79,10 +78,10 @@ fun ChatScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
         }
     }
 
-    LaunchedEffect(messages.size, uiState.isProcessing) {
-        val itemCount = messages.size + if (uiState.isProcessing) 1 else 0
+    LaunchedEffect(messages.size, uiState.isGeneratingChatResponse) {
+        val itemCount = messages.size + if (uiState.isGeneratingChatResponse) 1 else 0
         if (itemCount > 0) {
-            listState.animateScrollToItem(itemCount - 1)
+            listState.scrollToItem(itemCount - 1)
         }
     }
 
@@ -125,63 +124,54 @@ fun ChatScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
                     .weight(1f)
                     .fillMaxHeight()
             ) {
-                Scaffold(
-                    modifier = Modifier.fillMaxSize(),
-                    containerColor = SurfaceBackground,
-                    contentWindowInsets = WindowInsets(0, 0, 0, 0),
-                    bottomBar = {
-                        ChatComposer(
-                            draft = draft,
-                            onDraftChange = { draft = it },
-                            onSubmit = submitMessage,
-                            enabled = uiState.llmReady && !uiState.isProcessing,
-                            canSend = uiState.llmReady && !uiState.isProcessing && draft.isNotBlank()
-                        )
-                    }
-                ) { innerPadding ->
-                    Column(
+                Column(modifier = Modifier.fillMaxSize()) {
+                    ThreadHeader(selectedThread = selectedThread)
+                    Spacer(modifier = Modifier.height(Spacing.md))
+                    HorizontalDivider(color = DividerStrong, thickness = Sizes.hairline)
+                    Spacer(modifier = Modifier.height(Spacing.md))
+
+                    LazyColumn(
+                        state = listState,
                         modifier = Modifier
-                            .fillMaxSize()
-                            .padding(innerPadding)
-                            .consumeWindowInsets(innerPadding)
+                            .fillMaxWidth()
+                            .weight(1f),
+                        contentPadding = PaddingValues(vertical = Spacing.sm)
                     ) {
-                        ThreadHeader(selectedThread = selectedThread)
-                        Spacer(modifier = Modifier.height(Spacing.md))
-                        HorizontalDivider(color = DividerStrong, thickness = Sizes.hairline)
-                        Spacer(modifier = Modifier.height(Spacing.md))
-
-                        LazyColumn(
-                            state = listState,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .weight(1f),
-                            contentPadding = PaddingValues(vertical = Spacing.sm)
-                        ) {
-                            if (messages.isEmpty()) {
-                                item {
-                                    EmptyChatState(
-                                        llmReady = uiState.llmReady,
-                                        selectedLlm = selectedLlm,
-                                        isLoadingLlmModel = uiState.isLoadingLlmModel
-                                    )
-                                }
-                            } else {
-                                items(messages, key = { it.id }) { message ->
-                                    ChatBubble(
-                                        message = message,
-                                        assistantLabel = assistantLabel
-                                    )
-                                    Spacer(modifier = Modifier.height(Spacing.md))
-                                }
+                        if (messages.isEmpty()) {
+                            item {
+                                EmptyChatState(
+                                    llmReady = uiState.llmReady,
+                                    selectedLlm = selectedLlm,
+                                    isLoadingLlmModel = uiState.isLoadingLlmModel
+                                )
                             }
+                        } else {
+                            items(messages, key = { it.id }) { message ->
+                                ChatBubble(
+                                    message = message,
+                                    assistantLabel = assistantLabel
+                                )
+                                Spacer(modifier = Modifier.height(Spacing.md))
+                            }
+                        }
 
-                            if (uiState.isProcessing) {
-                                item {
-                                    ThinkingBubble(assistantLabel = assistantLabel)
-                                }
+                        if (uiState.isGeneratingChatResponse) {
+                            item {
+                                ThinkingBubble(
+                                    assistantLabel = assistantLabel,
+                                    startedAt = uiState.chatResponseStartedAt
+                                )
                             }
                         }
                     }
+
+                    ChatComposer(
+                        draft = draft,
+                        onDraftChange = { draft = it },
+                        onSubmit = submitMessage,
+                        enabled = uiState.llmReady && !uiState.isProcessing,
+                        canSend = uiState.llmReady && !uiState.isProcessing && draft.isNotBlank()
+                    )
                 }
             }
         }
@@ -434,6 +424,7 @@ private fun ChatBubble(message: ChatMessage, assistantLabel: String) {
     val textColor = if (isUser) AccentOnPrimary else TextPrimary
     val alignment = if (isUser) Alignment.End else Alignment.Start
     val label = if (isUser) "あなた" else assistantLabel
+    val metadata = message.responseMs?.let(::formatResponseTimeLabel)
     val bubbleShape = if (isUser) {
         RoundedCornerShape(
             topStart = Radius.lg,
@@ -472,17 +463,35 @@ private fun ChatBubble(message: ChatMessage, assistantLabel: String) {
                 color = textColor
             )
         }
+        if (metadata != null) {
+            Spacer(modifier = Modifier.height(Spacing.xs))
+            Text(
+                text = metadata,
+                style = MaterialTheme.typography.bodySmall,
+                color = TextTertiary
+            )
+        }
     }
 }
 
 @Composable
-private fun ThinkingBubble(assistantLabel: String) {
+private fun ThinkingBubble(assistantLabel: String, startedAt: Long?) {
     val bubbleShape = RoundedCornerShape(
         topStart = Radius.lg,
         topEnd = Radius.lg,
         bottomStart = Radius.sm,
         bottomEnd = Radius.lg
     )
+    val elapsedSeconds by produceState(initialValue = 0L, key1 = startedAt) {
+        if (startedAt == null) {
+            value = 0L
+            return@produceState
+        }
+        while (true) {
+            value = ((System.currentTimeMillis() - startedAt).coerceAtLeast(0L)) / 1000L
+            delay(250)
+        }
+    }
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.Start
@@ -507,10 +516,19 @@ private fun ThinkingBubble(assistantLabel: String) {
                 modifier = Modifier.size(16.dp)
             )
             Text(
-                text = "応答を生成しています…",
+                text = "応答を生成しています… ${elapsedSeconds}秒",
                 style = MaterialTheme.typography.bodyMedium,
                 color = TextSecondary
             )
         }
+    }
+}
+
+private fun formatResponseTimeLabel(responseMs: Long): String {
+    val seconds = responseMs / 1000.0
+    return if (seconds >= 10.0) {
+        String.format("%.0f秒で応答", seconds)
+    } else {
+        String.format("%.1f秒で応答", seconds)
     }
 }
