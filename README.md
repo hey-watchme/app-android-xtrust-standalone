@@ -373,11 +373,21 @@ Initial settings:
 - ASR engine: `sherpa-onnx`, `whisper.cpp`, `Android on-device`
 - LLM engine: `Gemma 4 E2B`, `Gemma 4 E4B`
 - Model path: local file picker or managed app model directory
-- VAD engine: threshold first, optional Silero later
+- VAD engine: `Threshold VAD` as the default and required local path
 - Data mode: local-only
 
 In a strict standalone build, do not show cloud providers as disabled options.
 The absence of cloud choices is part of the security story.
+
+VAD policy for this standalone app:
+
+- Do **not** add an `ONNX`-based VAD into this app process.
+- `ASR` already uses `sherpa-onnx`, and sharing or coexisting multiple `ONNX Runtime`
+  stacks in one Android app created native/JNI conflicts in practice.
+- Keep `VAD` independent from `ASR` runtime choices so `ASR` model or runtime
+  changes do not destabilize microphone segmentation.
+- If a stronger VAD is needed later, prefer a non-`ONNX` local implementation or
+  a strictly separate process / separate app boundary.
 
 ## What To Avoid Importing
 

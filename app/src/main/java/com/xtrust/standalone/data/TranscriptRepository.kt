@@ -156,6 +156,16 @@ class TranscriptRepository(context: Context) {
         id
     }
 
+    suspend fun deleteCard(cardId: Long) = withContext(Dispatchers.IO) {
+        dbHelper.writableDatabase.delete(
+            "cards",
+            "id = ?",
+            arrayOf(cardId.toString())
+        )
+        _cards.value = loadCards()
+        _sessions.value = loadSessionSummaries()
+    }
+
     suspend fun updateCardTranscription(
         cardId: Long,
         transcript: String,
@@ -176,6 +186,87 @@ class TranscriptRepository(context: Context) {
         )
         _cards.value = loadCards()
         _sessions.value = loadSessionSummaries()
+    }
+
+    suspend fun markCardTranscriptionFailed(
+        cardId: Long,
+        errorMessage: String,
+        transcriptionMs: Long
+    ) = withContext(Dispatchers.IO) {
+        val values = ContentValues().apply {
+            put("transcript", "[ASR失敗] ${errorMessage.take(80)}")
+            put("transcription_ms", transcriptionMs)
+            putNull("real_time_factor")
+            put("updated_at", System.currentTimeMillis())
+        }
+        dbHelper.writableDatabase.update(
+            "cards",
+            values,
+            "id = ?",
+            arrayOf(cardId.toString())
+        )
+        _cards.value = loadCards()
+        _sessions.value = loadSessionSummaries()
+    }
+
+    suspend fun loadCard(cardId: Long): CardEntity? = withContext(Dispatchers.IO) {
+        dbHelper.readableDatabase.query(
+            "cards",
+            null,
+            "id = ?",
+            arrayOf(cardId.toString()),
+            null,
+            null,
+            null,
+            "1"
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) return@withContext null
+            CardEntity(
+                id = cursor.getLong(cursor.getColumnIndexOrThrow("id")),
+                sessionId = cursor.getLong(cursor.getColumnIndexOrThrow("session_id")),
+                audioPath = cursor.getString(cursor.getColumnIndexOrThrow("audio_path")),
+                transcript = cursor.getString(cursor.getColumnIndexOrThrow("transcript")),
+                asrProvider = cursor.getString(cursor.getColumnIndexOrThrow("asr_provider")),
+                asrModel = cursor.getString(cursor.getColumnIndexOrThrow("asr_model")),
+                durationMs = cursor.getLong(cursor.getColumnIndexOrThrow("duration_ms")),
+                sizeBytes = cursor.getLong(cursor.getColumnIndexOrThrow("size_bytes")),
+                recordedAt = cursor.getLong(cursor.getColumnIndexOrThrow("recorded_at")),
+                transcriptionMs = cursor.getLongOrNull("transcription_ms"),
+                realTimeFactor = cursor.getDoubleOrNull("real_time_factor"),
+                createdAt = cursor.getLong(cursor.getColumnIndexOrThrow("created_at")),
+                updatedAt = cursor.getLong(cursor.getColumnIndexOrThrow("updated_at"))
+            )
+        }
+    }
+
+    suspend fun loadOldestPendingCard(): CardEntity? = withContext(Dispatchers.IO) {
+        dbHelper.readableDatabase.query(
+            "cards",
+            null,
+            "transcript IS NULL OR transcript = ''",
+            null,
+            null,
+            null,
+            "recorded_at ASC, id ASC",
+            "1"
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) return@withContext null
+            CardEntity(
+                id = cursor.getLong(cursor.getColumnIndexOrThrow("id")),
+                sessionId = cursor.getLong(cursor.getColumnIndexOrThrow("session_id")),
+                audioPath = cursor.getString(cursor.getColumnIndexOrThrow("audio_path")),
+                transcript = cursor.getString(cursor.getColumnIndexOrThrow("transcript")),
+                asrProvider = cursor.getString(cursor.getColumnIndexOrThrow("asr_provider")),
+                asrModel = cursor.getString(cursor.getColumnIndexOrThrow("asr_model")),
+                durationMs = cursor.getLong(cursor.getColumnIndexOrThrow("duration_ms")),
+                sizeBytes = cursor.getLong(cursor.getColumnIndexOrThrow("size_bytes")),
+                recordedAt = cursor.getLong(cursor.getColumnIndexOrThrow("recorded_at")),
+                transcriptionMs = cursor.getLongOrNull("transcription_ms"),
+                realTimeFactor = cursor.getDoubleOrNull("real_time_factor"),
+                createdAt = cursor.getLong(cursor.getColumnIndexOrThrow("created_at")),
+                updatedAt = cursor.getLong(cursor.getColumnIndexOrThrow("updated_at"))
+            )
+        }
     }
 
     suspend fun saveTopic(topic: TopicEntity): Long = withContext(Dispatchers.IO) {
@@ -489,11 +580,17 @@ class TranscriptRepository(context: Context) {
         step: String?,
         detail: String?
     ) = withContext(Dispatchers.IO) {
+        val existingStartedAt = dbHelper.readableDatabase.rawQuery(
+            "SELECT started_at FROM session_wrapup_jobs WHERE id = ?",
+            arrayOf(jobId.toString())
+        ).use { cursor ->
+            if (!cursor.moveToFirst() || cursor.isNull(0)) null else cursor.getLong(0)
+        }
         val values = ContentValues().apply {
             put("status", status)
             if (step != null) put("current_step", step) else putNull("current_step")
             if (detail != null) put("step_detail", detail) else putNull("step_detail")
-            if (status == WrapupJobEntity.STATUS_RUNNING) {
+            if (status == WrapupJobEntity.STATUS_RUNNING && existingStartedAt == null) {
                 put("started_at", System.currentTimeMillis())
             }
         }
@@ -527,11 +624,22 @@ class TranscriptRepository(context: Context) {
     }
 
     suspend fun loadPendingWrapupJobs(): List<WrapupJobEntity> = withContext(Dispatchers.IO) {
-        val jobs = mutableListOf<WrapupJobEntity>()
-        dbHelper.readableDatabase.rawQuery(
+        loadWrapupJobsByQuery(
             "SELECT * FROM session_wrapup_jobs WHERE status IN (?, ?) ORDER BY enqueued_at ASC",
             arrayOf(WrapupJobEntity.STATUS_PENDING, WrapupJobEntity.STATUS_RUNNING)
-        ).use { cursor ->
+        )
+    }
+
+    suspend fun loadAllWrapupJobs(): List<WrapupJobEntity> = withContext(Dispatchers.IO) {
+        loadWrapupJobsByQuery(
+            "SELECT * FROM session_wrapup_jobs ORDER BY enqueued_at DESC LIMIT 200",
+            emptyArray()
+        )
+    }
+
+    private fun loadWrapupJobsByQuery(sql: String, args: Array<String>): List<WrapupJobEntity> {
+        val jobs = mutableListOf<WrapupJobEntity>()
+        dbHelper.readableDatabase.rawQuery(sql, args).use { cursor ->
             while (cursor.moveToNext()) {
                 jobs += WrapupJobEntity(
                     id = cursor.getLong(cursor.getColumnIndexOrThrow("id")),
@@ -548,7 +656,7 @@ class TranscriptRepository(context: Context) {
                 )
             }
         }
-        jobs
+        return jobs
     }
 
     suspend fun saveSessionSummary(summary: SessionSummaryEntity) = withContext(Dispatchers.IO) {
@@ -585,6 +693,27 @@ class TranscriptRepository(context: Context) {
                 generatedAt = cursor.getLong(cursor.getColumnIndexOrThrow("generated_at"))
             )
         }
+    }
+
+    suspend fun loadAllSessionSummaries(): List<SessionSummaryEntity> = withContext(Dispatchers.IO) {
+        val summaries = mutableListOf<SessionSummaryEntity>()
+        dbHelper.readableDatabase.rawQuery(
+            "SELECT * FROM session_summaries ORDER BY generated_at DESC",
+            emptyArray()
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                summaries += SessionSummaryEntity(
+                    sessionId = cursor.getLong(cursor.getColumnIndexOrThrow("session_id")),
+                    generatedTitle = cursor.getStringOrNull("generated_title"),
+                    theme = cursor.getStringOrNull("theme"),
+                    agendaJson = cursor.getStringOrNull("agenda_json"),
+                    llmProvider = cursor.getStringOrNull("llm_provider"),
+                    llmModel = cursor.getStringOrNull("llm_model"),
+                    generatedAt = cursor.getLong(cursor.getColumnIndexOrThrow("generated_at"))
+                )
+            }
+        }
+        summaries
     }
 
     suspend fun loadWrapupJobForSession(sessionId: Long): WrapupJobEntity? = withContext(Dispatchers.IO) {

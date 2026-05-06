@@ -116,15 +116,18 @@ class SessionWrapupService : Service() {
             var summaryJson: String? = null
             try {
                 app.llmMutex.withLock {
+                    Log.d(TAG, "LLM generate start. transcript_len=${transcript.length}")
                     summaryJson = withTimeoutOrNull(WRAPUP_TIMEOUT_MS) {
                         engine.generate(buildPrompt(transcript))
                     }
+                    Log.d(TAG, "LLM generate done. result=${summaryJson?.take(300) ?: "NULL(timeout)"}")
                 }
             } finally {
                 tickJob.cancel()
             }
 
             if (summaryJson == null) {
+                Log.e(TAG, "Wrapup timed out after ${WRAPUP_TIMEOUT_MS / 1000}s for session=$sessionId")
                 finish(jobId, error = "タイムアウト (${WRAPUP_TIMEOUT_MS / 60_000}分)")
                 return
             }
@@ -194,14 +197,20 @@ $truncated
         return try {
             val s = raw.indexOf('{')
             val e = raw.lastIndexOf('}')
-            if (s < 0 || e < 0) return Triple(null, null, null)
-            val json = JSONObject(raw.substring(s, e + 1))
+            if (s < 0 || e < 0) {
+                Log.w(TAG, "No JSON braces found in LLM output: ${raw.take(200)}")
+                return Triple(null, raw.take(80).ifBlank { null }, null)
+            }
+            val jsonStr = raw.substring(s, e + 1)
+            Log.d(TAG, "Parsed JSON candidate: $jsonStr")
+            val json = JSONObject(jsonStr)
             val title = json.optString("title").ifBlank { null }
             val theme = json.optString("theme").ifBlank { null }
             val agenda = json.optJSONArray("agenda") ?: JSONArray()
+            Log.d(TAG, "Summary OK — title=$title theme=$theme agenda=$agenda")
             Triple(title, theme, agenda.toString())
         } catch (ex: Exception) {
-            Log.w(TAG, "JSON parse failed, raw=${raw.take(100)}")
+            Log.w(TAG, "JSON parse failed: ${ex.message}  raw=${raw.take(200)}")
             Triple(null, raw.take(80).ifBlank { null }, null)
         }
     }

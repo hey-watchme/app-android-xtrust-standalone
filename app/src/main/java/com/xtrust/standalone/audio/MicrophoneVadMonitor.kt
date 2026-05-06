@@ -56,7 +56,13 @@ class MicrophoneVadMonitor(
             "AudioRecord is not initialized"
         }
 
-        vadEngine.reset()
+        try {
+            vadEngine.reset()
+        } catch (t: Throwable) {
+            recorder.release()
+            onError(t)
+            return
+        }
         audioRecord = recorder
         try {
             recorder.startRecording()
@@ -99,7 +105,7 @@ class MicrophoneVadMonitor(
                 release()
             }
             audioRecord = null
-            vadEngine.reset()
+            runCatching { vadEngine.reset() }
         }
     }
 }

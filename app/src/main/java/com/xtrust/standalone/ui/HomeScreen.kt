@@ -30,10 +30,14 @@ import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -51,6 +55,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.xtrust.standalone.data.CardEntity
 import com.xtrust.standalone.data.RecordingSessionSummary
+import com.xtrust.standalone.data.SessionSummaryEntity
 import com.xtrust.standalone.data.WrapupJobEntity
 import com.xtrust.standalone.ui.theme.AccentOnPrimary
 import com.xtrust.standalone.ui.theme.AccentPrimary
@@ -71,13 +76,14 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
+import org.json.JSONArray
 
 @Composable
 fun HomeScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
     val uiState by viewModel.uiState.collectAsState()
     val cards by viewModel.cards.collectAsState()
     val sessions by viewModel.sessions.collectAsState()
-    var selectedSessionId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var focusedSessionId by rememberSaveable { mutableStateOf<Long?>(null) }
     val context = LocalContext.current
     val audioPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -93,11 +99,28 @@ fun HomeScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
         Manifest.permission.RECORD_AUDIO
     ) == PackageManager.PERMISSION_GRANTED
 
-    val selectedSession = sessions.firstOrNull { it.session.id == selectedSessionId }
-    val selectedSessionCards = remember(cards, selectedSessionId) {
+    val effectiveFocusedSessionId = focusedSessionId
+        ?.takeIf { targetId -> sessions.any { it.session.id == targetId } }
+        ?: sessions.firstOrNull()?.session?.id
+    val focusedSession = sessions.firstOrNull { it.session.id == effectiveFocusedSessionId }
+    val focusedSessionCards = remember(cards, effectiveFocusedSessionId) {
         cards
-            .filter { it.sessionId == selectedSessionId }
+            .filter { it.sessionId == effectiveFocusedSessionId }
             .sortedBy { it.recordedAt }
+    }
+
+    LaunchedEffect(sessions, uiState.vadDebugState.isListening) {
+        when {
+            uiState.vadDebugState.isListening && sessions.isNotEmpty() -> {
+                focusedSessionId = sessions.first().session.id
+            }
+            focusedSessionId == null && sessions.isNotEmpty() -> {
+                focusedSessionId = sessions.first().session.id
+            }
+            focusedSessionId != null && sessions.none { it.session.id == focusedSessionId } -> {
+                focusedSessionId = sessions.firstOrNull()?.session?.id
+            }
+        }
     }
 
     Box(
@@ -110,74 +133,96 @@ fun HomeScreen(viewModel: XtrustViewModel, modifier: Modifier = Modifier) {
                 .fillMaxSize()
                 .padding(Spacing.xl)
         ) {
-            uiState.lastError?.let { error ->
-                Text(
-                    text = error,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = StatusError,
-                    modifier = Modifier.padding(bottom = Spacing.md)
-                )
-            }
+            HomeHeader(lastError = uiState.lastError)
 
-            VadDebugCard(
-                vadState = uiState.vadDebugState,
-                onToggleListening = {
-                    if (uiState.vadDebugState.isListening) {
-                        viewModel.stopVadMonitoring()
-                    } else if (hasAudioPermission) {
-                        viewModel.startVadMonitoring()
-                    } else {
-                        audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                    }
-                }
-            )
-
-            Spacer(modifier = Modifier.height(Spacing.xl))
+            Spacer(modifier = Modifier.height(Spacing.lg))
 
             Row(modifier = Modifier.fillMaxSize()) {
-                LazyColumn(
-                    modifier = Modifier.weight(2f),
-                    contentPadding = PaddingValues(bottom = Spacing.lg)
+                Surface(
+                    modifier = Modifier.weight(1f),
+                    color = SurfaceSubtle,
+                    shape = RoundedCornerShape(Radius.lg)
                 ) {
-                    item {
-                        UtterancesCard(
-                            segments = uiState.vadDebugState.savedSegments
-                        )
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(Spacing.lg)
+                    ) {
+                        item {
+                            VadDebugCard(
+                                vadState = uiState.vadDebugState,
+                                onToggleListening = {
+                                    if (uiState.vadDebugState.isListening) {
+                                        viewModel.stopVadMonitoring()
+                                    } else if (hasAudioPermission) {
+                                        viewModel.startVadMonitoring()
+                                    } else {
+                                        audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                    }
+                                }
+                            )
+                        }
+                        item {
+                            Spacer(modifier = Modifier.height(Spacing.xl))
+                        }
+                        item {
+                            MinutesListCard(
+                                sessions = sessions,
+                                selectedSessionId = effectiveFocusedSessionId,
+                                wrapupJobBySession = uiState.wrapupJobBySession,
+                                onSelectSession = { sessionId -> focusedSessionId = sessionId },
+                                onCancelWrapup = { sessionId -> viewModel.cancelWrapup(sessionId) }
+                            )
+                        }
                     }
                 }
 
                 Spacer(modifier = Modifier.width(Spacing.xl))
 
                 LazyColumn(
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(2f),
                     contentPadding = PaddingValues(bottom = Spacing.lg)
                 ) {
                     item {
-                        MinutesListCard(
-                            sessions = sessions,
-                            wrapupJobBySession = uiState.wrapupJobBySession,
-                            onSelectSession = { sessionId -> selectedSessionId = sessionId },
-                            onCancelWrapup = { sessionId -> viewModel.cancelWrapup(sessionId) }
+                        UtterancesCard(
+                            summary = focusedSession,
+                            cards = focusedSessionCards,
+                            wrapupJob = effectiveFocusedSessionId?.let(uiState.wrapupJobBySession::get),
+                            sessionSummary = effectiveFocusedSessionId?.let(uiState.sessionSummaryBySession::get),
+                            isListening = focusedSession?.session?.status == "recording",
+                            isSpeechDetected = focusedSession?.session?.status == "recording" &&
+                                uiState.vadDebugState.isSpeechDetected,
+                            onWrapup = {
+                                effectiveFocusedSessionId?.let(viewModel::retryWrapup)
+                            }
                         )
                     }
                 }
             }
         }
+    }
+}
 
-        if (selectedSession != null) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.12f))
-                    .clickable { selectedSessionId = null }
-            )
-            MinutesDetailDrawer(
-                summary = selectedSession,
-                cards = selectedSessionCards,
-                modifier = Modifier.align(Alignment.CenterEnd),
-                onClose = { selectedSessionId = null }
+@Composable
+private fun HomeHeader(lastError: String?) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = "AI議事録",
+            style = MaterialTheme.typography.titleMedium,
+            color = TextPrimary
+        )
+        lastError?.let { error ->
+            Text(
+                text = error,
+                style = MaterialTheme.typography.bodySmall,
+                color = StatusError,
+                modifier = Modifier.padding(top = Spacing.xs)
             )
         }
+        HorizontalDivider(
+            modifier = Modifier.padding(top = Spacing.md),
+            color = DividerStrong,
+            thickness = Sizes.hairline
+        )
     }
 }
 
@@ -186,8 +231,8 @@ private fun buildRecordingStatusText(
     isSpeechDetected: Boolean
 ): String {
     return when {
-        isListening && isSpeechDetected -> "録音中・音声を検出しています"
-        isListening -> "録音中・音声を待機しています"
+        isListening && isSpeechDetected -> "録音中"
+        isListening -> "音声が検出されていません"
         else -> "停止中"
     }
 }
@@ -197,107 +242,174 @@ private fun VadDebugCard(
     vadState: VadDebugState,
     onToggleListening: () -> Unit
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = Spacing.lg)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "AI議事録",
-                style = MaterialTheme.typography.headlineSmall,
-                color = TextPrimary,
-                modifier = Modifier.weight(1f)
-            )
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Spacing.md)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(Spacing.sm)
-                            .clip(CircleShape)
-                            .background(
-                                if (vadState.isListening) StatusRecording else TextTertiary
-                            )
-                    )
-                    Text(
-                        text = buildRecordingStatusText(
-                            isListening = vadState.isListening,
-                            isSpeechDetected = vadState.isSpeechDetected
-                        ),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = TextSecondary
-                    )
-                }
-                Switch(
-                    checked = vadState.isListening,
-                    onCheckedChange = { onToggleListening() },
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = AccentOnPrimary,
-                        checkedTrackColor = AccentPrimary,
-                        uncheckedThumbColor = Color.White,
-                        uncheckedTrackColor = SurfaceSelected
-                    )
-                )
-            }
-        }
-        Spacer(modifier = Modifier.height(Spacing.md))
-        Text(
-            text = "レベル ${vadState.rmsDb.roundToInt()} dBFS  ・  開始 ${vadState.thresholdDb.roundToInt()} dBFS  ・  継続 ${vadState.continueThresholdDb.roundToInt()} dBFS",
-            style = MaterialTheme.typography.bodySmall,
-            color = TextTertiary
-        )
-        Text(
-            text = "検出 ${vadState.detectedSegments}  ・  最終発話 ${vadState.lastSpeechDurationMs} ms  ・  無音分割 ${vadState.pauseSplitMs} ms",
-            style = MaterialTheme.typography.bodySmall,
-            color = TextTertiary,
-            modifier = Modifier.padding(top = Spacing.xs)
-        )
-        Spacer(modifier = Modifier.height(Spacing.lg))
-        HorizontalDivider(
-            color = DividerStrong,
-            thickness = Sizes.hairline
-        )
+    val parameterLine1 = buildString {
+        append("レベル ${vadState.rmsDb.roundToInt()} dBFS")
+        append("  ・  開始 ${vadState.speechStartMs}ms")
+        append("  ・  無音分割 ${vadState.silenceSplitMs}ms")
     }
+    val parameterLine2 = "状態 ${vadState.engineLabel}  ・  ${if (vadState.isEngineReady) "準備完了" else vadState.engineStatus}"
+
+    Column(
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Button(
+            onClick = onToggleListening,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = Spacing.xs),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = AccentPrimary,
+                contentColor = AccentOnPrimary
+            )
+        ) {
+            Text(if (vadState.isListening) "停止" else "開始")
+        }
+        Row(
+            modifier = Modifier.padding(top = Spacing.md),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(Spacing.sm)
+                    .clip(CircleShape)
+                    .background(
+                        if (vadState.isListening) StatusRecording else TextTertiary
+                    )
+            )
+            Text(
+                text = buildRecordingStatusText(
+                    isListening = vadState.isListening,
+                    isSpeechDetected = vadState.isSpeechDetected
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = TextSecondary
+            )
+        }
+        Column(modifier = Modifier.padding(top = Spacing.md)) {
+            Text(
+                text = parameterLine1,
+                style = MaterialTheme.typography.bodySmall,
+                color = TextTertiary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = parameterLine2,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (vadState.isEngineReady) TextTertiary else StatusError,
+                modifier = Modifier.padding(top = Spacing.xxs)
+            )
+        }
+    }
+    HorizontalDivider(
+        color = DividerStrong,
+        thickness = Sizes.hairline
+    )
 }
 
 @Composable
 private fun UtterancesCard(
-    segments: List<AudioSegment>
+    summary: RecordingSessionSummary?,
+    cards: List<CardEntity>,
+    wrapupJob: WrapupJobEntity?,
+    sessionSummary: SessionSummaryEntity?,
+    isListening: Boolean = false,
+    isSpeechDetected: Boolean = false,
+    onWrapup: () -> Unit
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
-        Text(
-            text = "発言",
-            style = MaterialTheme.typography.labelSmall,
-            color = TextTertiary
-        )
-        Spacer(modifier = Modifier.height(Spacing.sm))
-        if (segments.isEmpty()) {
+        if (summary == null) {
             Text(
-                text = "ただいま発言はありません。",
+                text = "表示できる議事録がまだありません。",
+                style = MaterialTheme.typography.bodyMedium,
+                color = TextTertiary,
+                modifier = Modifier.padding(vertical = Spacing.md)
+            )
+            return
+        }
+
+        val started = remember(summary.session.startedAt) {
+            SimpleDateFormat("M月d日(E) HH:mm", Locale.JAPAN)
+                .format(Date(summary.session.startedAt))
+        }
+        val ended = summary.session.endedAt?.let {
+            remember(it) {
+                SimpleDateFormat("HH:mm", Locale.JAPAN).format(Date(it))
+            }
+        } ?: "進行中"
+        val isWrapupActive = wrapupJob?.status in listOf(
+            WrapupJobEntity.STATUS_PENDING,
+            WrapupJobEntity.STATUS_RUNNING
+        )
+        val wrapupButtonLabel = when {
+            isWrapupActive -> "要約中…"
+            wrapupJob?.status == WrapupJobEntity.STATUS_COMPLETED -> "再要約する"
+            wrapupJob?.status == WrapupJobEntity.STATUS_FAILED -> "再実行する"
+            wrapupJob?.status == WrapupJobEntity.STATUS_CANCELED -> "再実行する"
+            else -> "要約する"
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.Top
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = summary.session.title,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = TextPrimary
+                )
+                Text(
+                    text = "$started → $ended  ・  発言 ${summary.segmentCount}  ・  文字起こし ${summary.transcribedCount}  ・  ${buildSessionStatusText(summary.session.status)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextTertiary,
+                    modifier = Modifier.padding(top = Spacing.xs)
+                )
+            }
+            Spacer(modifier = Modifier.width(Spacing.md))
+            OutlinedButton(
+                onClick = onWrapup,
+                enabled = summary.transcribedCount > 0 && !isWrapupActive
+            ) {
+                Text(
+                    text = wrapupButtonLabel,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+        }
+
+        AiSummarySection(
+            wrapupJob = wrapupJob,
+            sessionSummary = sessionSummary,
+            modifier = Modifier.padding(top = Spacing.lg, bottom = Spacing.md)
+        )
+
+        val showPlaceholder = isListening && isSpeechDetected
+        if (!showPlaceholder && cards.isEmpty()) {
+            Text(
+                text = "この議事録にはまだ発言がありません。",
                 style = MaterialTheme.typography.bodyMedium,
                 color = TextTertiary,
                 modifier = Modifier.padding(vertical = Spacing.md)
             )
         } else {
             Column(modifier = Modifier.fillMaxWidth()) {
-                segments.forEachIndexed { index, segment ->
+                if (showPlaceholder) {
+                    LiveRecordingPlaceholderRow()
+                    if (cards.isNotEmpty()) {
+                        HorizontalDivider(color = DividerSubtle, thickness = Sizes.hairline)
+                    }
+                }
+                cards.forEachIndexed { index, card ->
                     if (index > 0) {
                         HorizontalDivider(
                             color = DividerSubtle,
                             thickness = Sizes.hairline
                         )
                     }
-                    UtteranceRow(segment = segment)
+                    MinutesDrawerUtteranceRow(card = card)
                 }
             }
         }
@@ -305,8 +417,105 @@ private fun UtterancesCard(
 }
 
 @Composable
+private fun AiSummarySection(
+    wrapupJob: WrapupJobEntity?,
+    sessionSummary: SessionSummaryEntity?,
+    modifier: Modifier = Modifier
+) {
+    Column(modifier = modifier.fillMaxWidth()) {
+        HorizontalDivider(color = DividerStrong, thickness = Sizes.hairline)
+        Text(
+            text = "AIによる要約",
+            style = MaterialTheme.typography.titleSmall,
+            color = TextPrimary,
+            modifier = Modifier.padding(top = Spacing.md)
+        )
+
+        wrapupJob?.let { job ->
+            val (label, color) = when (job.status) {
+                WrapupJobEntity.STATUS_PENDING -> "要約待ち" to TextTertiary
+                WrapupJobEntity.STATUS_RUNNING -> (job.stepDetail ?: "要約中…") to AccentPrimary
+                WrapupJobEntity.STATUS_COMPLETED -> "要約完了" to Color(0xFF22A06B)
+                WrapupJobEntity.STATUS_FAILED -> "要約失敗: ${job.lastError?.take(80)}" to StatusError
+                WrapupJobEntity.STATUS_CANCELED -> "キャンセル済み" to TextTertiary
+                else -> null to TextTertiary
+            }
+            label?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = color,
+                    modifier = Modifier.padding(top = Spacing.xs)
+                )
+            }
+            buildWrapupDurationLabel(job)?.let { durationLabel ->
+                Text(
+                    text = durationLabel,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary,
+                    modifier = Modifier.padding(top = Spacing.xxs)
+                )
+            }
+        }
+
+        if (sessionSummary == null) {
+            Text(
+                text = "まだ要約はありません。",
+                style = MaterialTheme.typography.bodyMedium,
+                color = TextTertiary,
+                modifier = Modifier.padding(top = Spacing.md)
+            )
+            return
+        }
+
+        sessionSummary.generatedTitle?.let { generatedTitle ->
+            SummaryBlock(
+                label = "タイトル",
+                value = generatedTitle
+            )
+        }
+        sessionSummary.theme?.let { theme ->
+            SummaryBlock(
+                label = "概要",
+                value = theme
+            )
+        }
+        val agendaItems = remember(sessionSummary.agendaJson) {
+            parseAgendaItems(sessionSummary.agendaJson)
+        }
+        if (agendaItems.isNotEmpty()) {
+            SummaryAgendaBlock(items = agendaItems)
+        }
+    }
+}
+
+@Composable
+private fun LiveRecordingPlaceholderRow() {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = Spacing.md),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(6.dp)
+                .clip(CircleShape)
+                .background(StatusRecording)
+        )
+        Text(
+            text = "録音中…",
+            style = MaterialTheme.typography.bodyMedium,
+            color = StatusRecording
+        )
+    }
+}
+
+@Composable
 private fun MinutesListCard(
     sessions: List<RecordingSessionSummary>,
+    selectedSessionId: Long?,
     wrapupJobBySession: Map<Long, WrapupJobEntity>,
     onSelectSession: (Long) -> Unit,
     onCancelWrapup: (Long) -> Unit
@@ -347,6 +556,7 @@ private fun MinutesListCard(
                     }
                     MinutesRow(
                         summary = summary,
+                        isSelected = summary.session.id == selectedSessionId,
                         wrapupJob = wrapupJobBySession[summary.session.id],
                         onClick = { onSelectSession(summary.session.id) },
                         onCancelWrapup = { onCancelWrapup(summary.session.id) }
@@ -360,6 +570,7 @@ private fun MinutesListCard(
 @Composable
 private fun MinutesRow(
     summary: RecordingSessionSummary,
+    isSelected: Boolean,
     wrapupJob: WrapupJobEntity?,
     onClick: () -> Unit,
     onCancelWrapup: () -> Unit
@@ -383,6 +594,7 @@ private fun MinutesRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(Radius.md))
+                .background(if (isSelected) Color.White else Color.Transparent)
                 .clickable(onClick = onClick)
                 .padding(horizontal = Spacing.sm, vertical = Spacing.md),
             horizontalArrangement = Arrangement.spacedBy(Spacing.md),
@@ -487,8 +699,11 @@ private fun buildSessionStatusText(status: String): String {
 private fun MinutesDetailDrawer(
     summary: RecordingSessionSummary,
     cards: List<CardEntity>,
+    wrapupJob: WrapupJobEntity?,
+    sessionSummary: SessionSummaryEntity?,
     modifier: Modifier = Modifier,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    onWrapup: () -> Unit
 ) {
     val started = remember(summary.session.startedAt) {
         SimpleDateFormat("yyyy年M月d日(E) HH:mm", Locale.JAPAN)
@@ -545,19 +760,46 @@ private fun MinutesDetailDrawer(
                                 .clickable(onClick = onClose)
                         )
                     }
-                    Spacer(modifier = Modifier.height(Spacing.lg))
+                    Spacer(modifier = Modifier.height(Spacing.md))
+                    val isWrapupActive = wrapupJob?.status in listOf(
+                        WrapupJobEntity.STATUS_PENDING, WrapupJobEntity.STATUS_RUNNING
+                    )
+                    if (isWrapupActive) {
+                        val detail = wrapupJob?.stepDetail ?: "要約中…"
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .clip(CircleShape)
+                                    .background(AccentPrimary)
+                            )
+                            Text(
+                                text = detail,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = AccentPrimary
+                            )
+                        }
+                    } else {
+                        OutlinedButton(
+                            onClick = onWrapup,
+                            enabled = summary.transcribedCount > 0
+                        ) {
+                            Text(
+                                text = "この議事録を要約する",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(Spacing.md))
                     HorizontalDivider(color = DividerStrong, thickness = Sizes.hairline)
                     Spacer(modifier = Modifier.height(Spacing.md))
                     Text(
-                        text = "開始  $started",
+                        text = "開始  $started  →  $ended",
                         style = MaterialTheme.typography.bodySmall,
                         color = TextSecondary
-                    )
-                    Text(
-                        text = "終了  $ended",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = TextSecondary,
-                        modifier = Modifier.padding(top = Spacing.xxs)
                     )
                     Text(
                         text = "状態  ${buildSessionStatusText(summary.session.status)}  ・  発言 ${summary.segmentCount}  ・  文字起こし ${summary.transcribedCount}",
@@ -573,11 +815,66 @@ private fun MinutesDetailDrawer(
                             modifier = Modifier.padding(top = Spacing.sm)
                         )
                     }
+                    if (wrapupJob != null) {
+                        val (wrapupLabel, wrapupColor) = when (wrapupJob.status) {
+                            WrapupJobEntity.STATUS_PENDING -> "要約待ち" to TextTertiary
+                            WrapupJobEntity.STATUS_RUNNING -> (wrapupJob.stepDetail ?: "要約中…") to AccentPrimary
+                            WrapupJobEntity.STATUS_COMPLETED -> "要約完了" to androidx.compose.ui.graphics.Color(0xFF22A06B)
+                            WrapupJobEntity.STATUS_FAILED -> "要約失敗: ${wrapupJob.lastError?.take(30)}" to StatusError
+                            WrapupJobEntity.STATUS_CANCELED -> "キャンセル済み" to TextTertiary
+                            else -> null to TextTertiary
+                        }
+                        if (wrapupLabel != null) {
+                            Text(
+                                text = "AI要約  $wrapupLabel",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = wrapupColor,
+                                modifier = Modifier.padding(top = Spacing.xxs)
+                            )
+                        }
+                    }
+                    if (sessionSummary != null) {
+                        val wrapupDurationLabel = buildWrapupDurationLabel(wrapupJob)
+                        Spacer(modifier = Modifier.height(Spacing.lg))
+                        HorizontalDivider(color = DividerStrong, thickness = Sizes.hairline)
+                        Spacer(modifier = Modifier.height(Spacing.lg))
+                        Text(
+                            text = "AI要約",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = TextPrimary
+                        )
+                        wrapupDurationLabel?.let { durationLabel ->
+                            Text(
+                                text = durationLabel,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextSecondary,
+                                modifier = Modifier.padding(top = Spacing.xxs)
+                            )
+                        }
+                        sessionSummary.generatedTitle?.let { generatedTitle ->
+                            SummaryBlock(
+                                label = "タイトル",
+                                value = generatedTitle
+                            )
+                        }
+                        sessionSummary.theme?.let { theme ->
+                            SummaryBlock(
+                                label = "概要",
+                                value = theme
+                            )
+                        }
+                        val agendaItems = remember(sessionSummary.agendaJson) {
+                            parseAgendaItems(sessionSummary.agendaJson)
+                        }
+                        if (agendaItems.isNotEmpty()) {
+                            SummaryAgendaBlock(items = agendaItems)
+                        }
+                    }
                     Text(
                         text = "ID  ${summary.session.id}",
                         style = MaterialTheme.typography.labelSmall,
                         color = TextTertiary,
-                        modifier = Modifier.padding(top = Spacing.md)
+                        modifier = Modifier.padding(top = Spacing.lg)
                     )
                     Spacer(modifier = Modifier.height(Spacing.md))
                     HorizontalDivider(color = DividerStrong, thickness = Sizes.hairline)
@@ -599,14 +896,86 @@ private fun MinutesDetailDrawer(
                 }
                 item {
                     Spacer(modifier = Modifier.height(Spacing.lg))
-                    Text(
-                        text = "今後はこの発言一覧をもとに、ローカル LLM で要約や整理を行います。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = TextTertiary
-                    )
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SummaryBlock(
+    label: String,
+    value: String
+) {
+    Text(
+        text = label,
+        style = MaterialTheme.typography.labelSmall,
+        color = TextTertiary,
+        modifier = Modifier.padding(top = Spacing.md)
+    )
+    Text(
+        text = value,
+        style = MaterialTheme.typography.bodyLarge,
+        color = TextPrimary,
+        modifier = Modifier.padding(top = Spacing.xxs)
+    )
+}
+
+@Composable
+private fun SummaryAgendaBlock(items: List<String>) {
+    Text(
+        text = "トピック",
+        style = MaterialTheme.typography.labelSmall,
+        color = TextTertiary,
+        modifier = Modifier.padding(top = Spacing.md)
+    )
+    Column(
+        modifier = Modifier.padding(top = Spacing.xs),
+        verticalArrangement = Arrangement.spacedBy(Spacing.xs)
+    ) {
+        items.forEach { item ->
+            Text(
+                text = "・$item",
+                style = MaterialTheme.typography.bodyMedium,
+                color = TextPrimary
+            )
+        }
+    }
+}
+
+private fun parseAgendaItems(agendaJson: String?): List<String> {
+    if (agendaJson.isNullOrBlank()) return emptyList()
+    return runCatching {
+        val agenda = JSONArray(agendaJson)
+        buildList {
+            for (index in 0 until agenda.length()) {
+                val item = agenda.optString(index).trim()
+                if (item.isNotEmpty()) add(item)
+            }
+        }
+    }.getOrElse { emptyList() }
+}
+
+private fun buildWrapupDurationLabel(job: WrapupJobEntity?): String? {
+    if (job?.status != WrapupJobEntity.STATUS_COMPLETED) return null
+    val finishedAt = job.finishedAt ?: return null
+    val startedAt = job.startedAt ?: job.enqueuedAt
+    val durationMs = (finishedAt - startedAt).coerceAtLeast(0L)
+    return if (durationMs > 0L) {
+        "完了時間  ${formatElapsedDuration(durationMs)}"
+    } else {
+        null
+    }
+}
+
+private fun formatElapsedDuration(durationMs: Long): String {
+    val totalSeconds = durationMs / 1000L
+    val minutes = totalSeconds / 60L
+    val seconds = totalSeconds % 60L
+    return if (minutes > 0L) {
+        "${minutes}分${seconds}秒"
+    } else {
+        "${seconds}秒"
     }
 }
 

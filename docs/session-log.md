@@ -21,7 +21,7 @@
 | multi-turn チャット | `Conversation` を保持してローカル会話を継続できるように変更 |
 | メモリ可視化 | Home 画面に Device RAM / App heap / Native heap の使用量表示を追加 |
 | ASR 作業計画 | `docs/asr-plan.md` に `sherpa-onnx` 前提の段階計画を追加 |
-| VAD 足場実装 | `EnergyVadEngine` + `MicrophoneVadMonitor` でローカル発話検知デバッグ UI を追加 |
+| VAD 足場実装 | `ThresholdVadEngine` + `MicrophoneVadMonitor` でローカル発話検知デバッグ UI を追加 |
 | VAD セグメント保存 | 発話終了ごとに `wav` をローカル保存し、Home 画面に直近セグメント一覧を表示 |
 | ファイル入力 ASR | `sherpa-onnx-1.12.39.aar` と SenseVoice 前提で保存済み `wav` を `Transcribe` 可能にした |
 | VAD 再調整 | 発話継続側を甘くし、900ms 未満の短片を破棄して分割過多を抑制 |
@@ -125,7 +125,7 @@ engine.createConversation(ConversationConfig(
 ## 現在の VAD 実装
 
 - `vad/LocalVadEngine.kt` を追加して VAD 実装を差し替え可能な構造にした
-- `vad/EnergyVadEngine.kt` で簡易エネルギーベース VAD を実装
+- `vad/ThresholdVadEngine.kt` で `ZeroTouch` 由来の閾値ベース VAD を standalone 用に実装
 - `audio/MicrophoneVadMonitor.kt` でマイクから 16kHz mono PCM を読み取り、VAD に渡す形を追加
 - Home 画面に `Start VAD` / `Stop VAD`、`Speech detected`、`dBFS`、検出セグメント数、最後の発話長を表示
 - これは `sherpa-onnx` 導入前の足場であり、本命の VAD 実装とは切り替え前提

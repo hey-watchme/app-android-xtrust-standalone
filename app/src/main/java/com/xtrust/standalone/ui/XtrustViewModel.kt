@@ -14,6 +14,7 @@ import com.xtrust.standalone.data.ChatThreadEntity
 import com.xtrust.standalone.asr.LocalAsrEngine
 import com.xtrust.standalone.asr.SherpaOnnxAsrEngine
 import com.xtrust.standalone.data.ChatMessageEntity as StoredChatMessageEntity
+import com.xtrust.standalone.data.SessionSummaryEntity
 import com.xtrust.standalone.data.TopicEntity
 import com.xtrust.standalone.data.TranscriptRepository
 import com.xtrust.standalone.data.WrapupJobEntity
@@ -21,11 +22,15 @@ import com.xtrust.standalone.llm.LlmDiagnostics
 import com.xtrust.standalone.llm.LocalLlmCatalog
 import com.xtrust.standalone.llm.LocalLlmDefinition
 import com.xtrust.standalone.llm.LocalLlmEngine
-import com.xtrust.standalone.vad.EnergyVadEngine
+import com.xtrust.standalone.vad.ThresholdVadEngine
 import com.xtrust.standalone.vad.VadFrameResult
-import com.xtrust.standalone.wrapup.SessionWrapupService
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -35,7 +40,10 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONArray
+import org.json.JSONObject
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
@@ -56,6 +64,7 @@ data class UiState(
     val isProcessing: Boolean = false,
     val lastError: String? = null,
     val wrapupJobBySession: Map<Long, WrapupJobEntity> = emptyMap(),
+    val sessionSummaryBySession: Map<Long, SessionSummaryEntity> = emptyMap(),
     val llmRuntimeInfo: String = "",
     val llmBenchmarkResult: String? = null,
     val isRunningBenchmark: Boolean = false,
@@ -71,10 +80,14 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
     private var llmEngine: LocalLlmEngine?
         get() = app.llmEngine
         set(value) { app.llmEngine = value }
-    private var wrapupPollingJob: Job? = null
     private val asrEngine: LocalAsrEngine = SherpaOnnxAsrEngine()
-    private val vadEngine = EnergyVadEngine()
+    private val vadEngine = ThresholdVadEngine()
     private val microphoneVadMonitor = MicrophoneVadMonitor(vadEngine)
+    private val wrapupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val activeWrapupJobs = mutableMapOf<Long, Job>()
+    private val wrapupJobLock = Any()
+    private var asrDrainJob: Job? = null
+    private val asrDrainLock = Any()
 
     private val modelBaseDir: File = run {
         val dir = application.getExternalFilesDir(null)
@@ -94,6 +107,13 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
             llmModelPath = defaultLlmDefinition.modelPath,
             selectedLlmId = defaultLlmDefinition.id,
             availableLlmOptions = llmDefinitions.map(::toLlmModelOption),
+            vadDebugState = VadDebugState(
+                engineLabel = vadEngine.engineLabel,
+                speechStartMs = vadEngine.speechStartMs,
+                silenceSplitMs = vadEngine.silenceSplitMs,
+                isEngineReady = vadEngine.isAvailable(),
+                engineStatus = vadEngine.statusText()
+            ),
             asrDebugState = AsrDebugState(modelDirPath = resolveAsrModelDirPath())
         )
     )
@@ -120,6 +140,7 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
             repository.refresh()
             ensureChatThreadSelection()
             resumePendingWrapupJobs()
+            schedulePendingTranscriptions()
         }
         startMemoryMonitor()
         autoLoadLlmModel()
@@ -164,11 +185,13 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun releaseLlmModel() {
-        releaseCurrentLlmEngine()
-        clearLlmLoadedState(clearChat = false, clearLastError = true)
-        activeRuntimeThreadId = null
-        runtimeNeedsBootstrap = true
-        refreshMemorySnapshot()
+        viewModelScope.launch {
+            releaseCurrentLlmEngine()
+            clearLlmLoadedState(clearChat = false, clearLastError = true)
+            activeRuntimeThreadId = null
+            runtimeNeedsBootstrap = true
+            refreshMemorySnapshot()
+        }
     }
 
     private fun hasCompleteLlmModelFile(definition: LocalLlmDefinition): Boolean {
@@ -199,9 +222,11 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
         )
     }
 
-    private fun releaseCurrentLlmEngine() {
-        app.llmEngine?.close()
-        app.llmEngine = null
+    private suspend fun releaseCurrentLlmEngine() = withContext(Dispatchers.IO) {
+        app.llmMutex.withLock {
+            app.llmEngine?.close()
+            app.llmEngine = null
+        }
     }
 
     private fun clearLlmLoadedState(clearChat: Boolean, clearLastError: Boolean) {
@@ -277,10 +302,19 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
                     releaseCurrentLlmEngine()
                     clearLlmLoadedState(clearChat = false, clearLastError = false)
 
-                    val engine = checkNotNull(definition.engineFactory).invoke(getApplication())
-                    engine.initialize(definition.modelPath)
-                    llmEngine = engine
-                    val runtimeInfo = (engine as? LlmDiagnostics)?.runtimeInfo().orEmpty()
+                    val engine = withContext(Dispatchers.IO) {
+                        app.llmMutex.withLock {
+                            val created = checkNotNull(definition.engineFactory).invoke(getApplication())
+                            created.initialize(definition.modelPath)
+                            app.llmEngine = created
+                            created
+                        }
+                    }
+                    val runtimeInfo = withContext(Dispatchers.IO) {
+                        app.llmMutex.withLock {
+                            (engine as? LlmDiagnostics)?.runtimeInfo().orEmpty()
+                        }
+                    }
 
                     _uiState.update {
                         it.copy(
@@ -543,6 +577,8 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
                     it.copy(
                         lastError = null,
                         vadDebugState = it.vadDebugState.copy(
+                            isEngineReady = vadEngine.isAvailable(),
+                            engineStatus = vadEngine.statusText(),
                             isListening = true,
                             isSpeechDetected = false,
                             rmsDb = -120.0
@@ -567,7 +603,12 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
                 _uiState.update {
                     it.copy(
                         lastError = "VAD start failed: ${e.message}",
-                        vadDebugState = it.vadDebugState.copy(isListening = false, isSpeechDetected = false)
+                        vadDebugState = it.vadDebugState.copy(
+                            isEngineReady = vadEngine.isAvailable(),
+                            engineStatus = vadEngine.statusText(),
+                            isListening = false,
+                            isSpeechDetected = false
+                        )
                     )
                 }
             }
@@ -580,6 +621,8 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
             _uiState.update {
                 it.copy(
                     vadDebugState = it.vadDebugState.copy(
+                        isEngineReady = vadEngine.isAvailable(),
+                        engineStatus = vadEngine.statusText(),
                         isListening = false,
                         isSpeechDetected = false
                     )
@@ -590,10 +633,10 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
 
     private suspend fun completeActiveSession() {
         val sessionId = activeSessionId
-        activeSessionId = null
 
         microphoneVadMonitor.stop()
-        flushActiveSpeechSegment()
+        flushActiveSpeechSegment(sessionId)
+        activeSessionId = null
 
         if (sessionId != null) {
             repository.completeOrDeleteEmptySession(sessionId, System.currentTimeMillis())
@@ -604,66 +647,190 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
     private suspend fun enqueueWrapupJob(sessionId: Long) {
         val transcript = repository.getSessionTranscript(sessionId)
         if (transcript.isBlank()) return
-        val llmModel = loadedLlmDefinition()?.dbModel
-        val jobId = repository.enqueueWrapupJob(sessionId, llmModel)
-        SessionWrapupService.start(getApplication(), sessionId, jobId)
-        startWrapupPolling()
+        wrapupInProcess(sessionId)
+    }
+
+    fun wrapupInProcess(sessionId: Long) {
+        synchronized(wrapupJobLock) {
+            if (activeWrapupJobs[sessionId]?.isActive == true) {
+                Log.d("XtrustVM", "Wrapup already running for session=$sessionId")
+                return
+            }
+            activeWrapupJobs[sessionId] = wrapupScope.launch {
+                runWrapup(sessionId)
+            }
+        }
+    }
+
+    private suspend fun runWrapup(sessionId: Long) {
+        var jobId: Long? = null
+        try {
+            val transcript = repository.getSessionTranscript(sessionId)
+            if (transcript.isBlank()) return
+
+            val llmModel = loadedLlmDefinition()?.dbModel
+            val engine = llmEngine
+            jobId = repository.enqueueWrapupJob(sessionId, llmModel)
+            refreshWrapupState()
+
+            if (engine == null || !engine.isReady) {
+                repository.failWrapupJob(jobId, "LLMがロードされていません")
+                refreshWrapupState()
+                return
+            }
+
+            repository.updateWrapupJobStep(jobId, WrapupJobEntity.STATUS_RUNNING, "generate", "要約生成中…")
+            refreshWrapupState()
+
+            var elapsedSec = 0
+            val tickJob = wrapupScope.launch {
+                while (isActive) {
+                    delay(1000)
+                    elapsedSec++
+                    val detail = "要約生成中… (${elapsedSec}秒)"
+                    _uiState.update { state ->
+                        val updated = state.wrapupJobBySession[sessionId]
+                            ?.copy(stepDetail = detail)
+                            ?: return@update state
+                        state.copy(wrapupJobBySession = state.wrapupJobBySession + (sessionId to updated))
+                    }
+                }
+            }
+
+            val rawOutput = try {
+                app.llmMutex.withLock {
+                    Log.d("XtrustVM", "Wrapup start: transcript_len=${transcript.length}")
+                    withTimeoutOrNull(WRAPUP_TIMEOUT_MS) {
+                        engine.generate(buildWrapupPrompt(transcript))
+                    }.also {
+                        Log.d("XtrustVM", "Wrapup done: ${it?.take(300) ?: "NULL(timeout)"}")
+                    }
+                }
+            } finally {
+                tickJob.cancelAndJoin()
+            }
+
+            if (rawOutput == null) {
+                Log.e("XtrustVM", "Wrapup timeout after ${WRAPUP_TIMEOUT_MS / 1000}s")
+                repository.failWrapupJob(jobId, "タイムアウト (${WRAPUP_TIMEOUT_MS / 60_000}分)")
+                refreshWrapupState()
+                return
+            }
+
+            try {
+                val (title, theme, agendaJson) = parseWrapupJson(rawOutput)
+                repository.saveSessionSummary(
+                    SessionSummaryEntity(
+                        sessionId = sessionId,
+                        generatedTitle = title,
+                        theme = theme,
+                        agendaJson = agendaJson,
+                        llmProvider = loadedLlmDefinition()?.dbProvider ?: "bonsai",
+                        llmModel = llmModel ?: "unknown",
+                        generatedAt = System.currentTimeMillis()
+                    )
+                )
+                repository.completeWrapupJob(jobId)
+                Log.d("XtrustVM", "Wrapup saved: title=$title")
+            } catch (e: Exception) {
+                Log.e("XtrustVM", "Wrapup save failed", e)
+                repository.failWrapupJob(jobId, e.message ?: "保存エラー")
+            }
+            refreshWrapupState()
+        } catch (e: CancellationException) {
+            llmEngine?.cancel()
+            if (jobId != null) {
+                repository.cancelWrapupJob(jobId)
+                refreshWrapupState()
+            }
+            throw e
+        } finally {
+            synchronized(wrapupJobLock) {
+                activeWrapupJobs.remove(sessionId)
+            }
+        }
+    }
+
+    private fun buildWrapupPrompt(transcript: String): String {
+        val truncated = if (transcript.length > 2000) transcript.takeLast(2000) else transcript
+        return """以下の会議の発言録を読んで、必ず次のJSON形式のみで回答してください。日本語で回答し、余分な説明や前置きは不要です。
+
+{"title":"...","theme":"...","agenda":["...","..."]}
+
+- title: 会議のタイトル（15文字以内）
+- theme: 会議の主なテーマや目的（50文字以内）
+- agenda: 議論されたトピックのリスト（3〜5個）
+
+発言録:
+$truncated"""
+    }
+
+    private fun parseWrapupJson(raw: String): Triple<String?, String?, String?> {
+        return try {
+            val s = raw.indexOf('{')
+            val e = raw.lastIndexOf('}')
+            if (s < 0 || e < 0) {
+                Log.w("XtrustVM", "No JSON braces in wrapup output: ${raw.take(200)}")
+                return Triple(null, raw.take(80).ifBlank { null }, null)
+            }
+            val json = JSONObject(raw.substring(s, e + 1))
+            val title = json.optString("title").ifBlank { null }
+            val theme = json.optString("theme").ifBlank { null }
+            val agenda = json.optJSONArray("agenda") ?: JSONArray()
+            Triple(title, theme, agenda.toString())
+        } catch (ex: Exception) {
+            Log.w("XtrustVM", "Wrapup JSON parse failed: ${ex.message}  raw=${raw.take(200)}")
+            Triple(null, raw.take(80).ifBlank { null }, null)
+        }
     }
 
     fun cancelWrapup(sessionId: Long) {
-        viewModelScope.launch {
+        synchronized(wrapupJobLock) {
+            activeWrapupJobs.remove(sessionId)?.cancel()
+        }
+        llmEngine?.cancel()
+        wrapupScope.launch {
             val job = repository.loadWrapupJobForSession(sessionId)
             if (job != null) {
                 repository.cancelWrapupJob(job.id)
+                refreshWrapupState()
             }
-            SessionWrapupService.cancel(getApplication())
-            _uiState.update {
-                it.copy(wrapupJobBySession = it.wrapupJobBySession - sessionId)
-            }
-            wrapupPollingJob?.cancel()
         }
     }
 
     fun retryWrapup(sessionId: Long) {
-        viewModelScope.launch {
-            enqueueWrapupJob(sessionId)
-        }
+        wrapupInProcess(sessionId)
     }
 
     private fun startWrapupPolling() {
-        wrapupPollingJob?.cancel()
-        wrapupPollingJob = viewModelScope.launch {
-            while (isActive) {
-                val jobs = repository.loadPendingWrapupJobs()
-                if (jobs.isEmpty()) {
-                    refreshWrapupState()
-                    break
-                }
-                _uiState.update { state ->
-                    state.copy(wrapupJobBySession = jobs.associateBy { it.sessionId })
-                }
-                delay(2000)
-            }
-        }
+        // polling は wrapupInProcess 内のtickerが直接UIを更新するため不要
+        // アプリ再起動後の状態復元のためだけ残す
+        viewModelScope.launch { refreshWrapupState() }
     }
 
     private suspend fun refreshWrapupState() {
-        val jobs = repository.loadPendingWrapupJobs()
+        val jobs = repository.loadAllWrapupJobs()
+        val summaries = repository.loadAllSessionSummaries()
         _uiState.update { state ->
-            state.copy(wrapupJobBySession = jobs.associateBy { it.sessionId })
+            state.copy(
+                wrapupJobBySession = jobs.associateBy { it.sessionId },
+                sessionSummaryBySession = summaries.associateBy { it.sessionId }
+            )
         }
     }
 
     private suspend fun resumePendingWrapupJobs() {
-        val pending = repository.loadPendingWrapupJobs()
-        if (pending.isEmpty()) return
-        _uiState.update { state ->
-            state.copy(wrapupJobBySession = pending.associateBy { it.sessionId })
+        val staleJobs = repository.loadPendingWrapupJobs()
+        if (staleJobs.isNotEmpty()) {
+            Log.w("XtrustVM", "Marking ${staleJobs.size} stale wrapup job(s) as failed on startup")
         }
-        pending.forEach { job ->
-            SessionWrapupService.start(getApplication(), job.sessionId, job.id)
+        staleJobs.forEach { job ->
+            repository.failWrapupJob(
+                jobId = job.id,
+                error = "前回の要約処理が中断されました。再実行してください"
+            )
         }
-        startWrapupPolling()
+        refreshWrapupState()
     }
 
     private fun handleMonitoringFailure(throwable: Throwable) {
@@ -673,6 +840,8 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
                 it.copy(
                     lastError = "VAD monitor failed: ${throwable.message}",
                     vadDebugState = it.vadDebugState.copy(
+                        isEngineReady = vadEngine.isAvailable(),
+                        engineStatus = vadEngine.statusText(),
                         isListening = false,
                         isSpeechDetected = false
                     )
@@ -683,10 +852,10 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
 
     private suspend fun failActiveSession(errorMessage: String) {
         val sessionId = activeSessionId
-        activeSessionId = null
 
         microphoneVadMonitor.stop()
-        flushActiveSpeechSegment()
+        flushActiveSpeechSegment(sessionId)
+        activeSessionId = null
 
         if (sessionId != null) {
             repository.failSession(
@@ -739,11 +908,13 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun resetRuntimeConversationForSelectedThread() {
-        if (llmEngine?.isReady == true) {
-            llmEngine?.resetChat()
-        }
         activeRuntimeThreadId = _uiState.value.selectedChatThreadId
         runtimeNeedsBootstrap = _chatMessages.value.isNotEmpty()
+        viewModelScope.launch(Dispatchers.IO) {
+            app.llmMutex.withLock {
+                llmEngine?.takeIf { it.isReady }?.resetChat()
+            }
+        }
     }
 
     private suspend fun ensureChatThreadSelection() {
@@ -903,7 +1074,7 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    private fun flushActiveSpeechSegment() {
+    private fun flushActiveSpeechSegment(sessionId: Long?) {
         val segmentToSave: ShortArray?
         synchronized(captureLock) {
             segmentToSave = if (activeSpeechFrames.isNotEmpty()) {
@@ -928,7 +1099,7 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
                 saveSegment(
                     samples = segmentToSave,
                     durationMs = durationMs,
-                    sessionId = activeSessionId
+                    sessionId = sessionId
                 )
             }
         }
@@ -972,12 +1143,7 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
                     )
                 }
                 if (AUTO_TRANSCRIBE_SEGMENTS) {
-                    viewModelScope.launch {
-                        updateSegment(segment.id) { currentSegment ->
-                            currentSegment.copy(isTranscribing = true, asrError = null)
-                        }
-                        transcribeSegmentInternal(segment.id, showErrors = false)
-                    }
+                    schedulePendingTranscriptions()
                 }
             } catch (e: Exception) {
                 _uiState.update { it.copy(lastError = "セグメント保存失敗: ${e.message}") }
@@ -985,20 +1151,66 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    private suspend fun transcribeSegmentInternal(segmentId: Long, showErrors: Boolean) {
+    private fun schedulePendingTranscriptions() {
+        synchronized(asrDrainLock) {
+            if (asrDrainJob?.isActive == true) return
+            asrDrainJob = viewModelScope.launch {
+                drainPendingTranscriptions()
+            }
+        }
+    }
+
+    private suspend fun drainPendingTranscriptions() {
+        var shouldContinue = true
+        while (true) {
+            val pendingCard = repository.loadOldestPendingCard() ?: break
+            updateSegment(pendingCard.id) { currentSegment ->
+                currentSegment.copy(isTranscribing = true, asrError = null)
+            }
+            val completed = transcribeSegmentInternal(pendingCard.id, showErrors = false)
+            if (!completed) {
+                shouldContinue = false
+                break
+            }
+        }
+        synchronized(asrDrainLock) {
+            asrDrainJob = null
+        }
+        val hasMorePending = shouldContinue && repository.loadOldestPendingCard() != null
+        if (hasMorePending) {
+            schedulePendingTranscriptions()
+        }
+    }
+
+    private suspend fun transcribeSegmentInternal(segmentId: Long, showErrors: Boolean): Boolean {
         asrTranscriptionMutex.withLock {
-            val segment = _uiState.value.vadDebugState.savedSegments.firstOrNull { it.id == segmentId }
-            if (segment == null) return
+            val card = repository.loadCard(segmentId)
+            if (card == null) return true
 
             if (!ensureAsrReady(showErrors = showErrors)) {
                 updateSegment(segmentId) { it.copy(isTranscribing = false, asrError = "ASR model is not loaded") }
-                return
+                return false
             }
 
             val startedAt = System.currentTimeMillis()
             try {
-                val transcript = asrEngine.transcribe(segment.filePath)
+                Log.d("XtrustVM", "ASR start: cardId=$segmentId file=${card.audioPath}")
+                val transcript = try {
+                    asrEngine.transcribe(card.audioPath)
+                } catch (firstError: Exception) {
+                    Log.w("XtrustVM", "ASR first attempt failed, trying engine recovery for cardId=$segmentId", firstError)
+                    if (!recoverAsrEngine()) throw firstError
+                    asrEngine.transcribe(card.audioPath)
+                }
                 val elapsedMs = System.currentTimeMillis() - startedAt
+
+                if (isNoiseTranscript(transcript.text)) {
+                    repository.deleteCard(segmentId)
+                    File(card.audioPath).delete()
+                    removeSegment(segmentId)
+                    return true
+                }
+
                 val audioDurationMs = transcript.sampleCount * 1000L / transcript.sampleRate
                 val rtf = if (audioDurationMs > 0) {
                     elapsedMs.toDouble() / audioDurationMs.toDouble()
@@ -1030,17 +1242,60 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
                     )
                 }
                 refreshMemorySnapshot()
+                Log.d("XtrustVM", "ASR done: cardId=$segmentId elapsedMs=$elapsedMs text=${transcript.text.take(80)}")
+                return true
             } catch (e: Exception) {
+                Log.e("XtrustVM", "ASR failed: cardId=$segmentId file=${card.audioPath}", e)
+                val elapsedMs = System.currentTimeMillis() - startedAt
+                val errorMessage = e.message ?: "Unknown ASR error"
+                repository.markCardTranscriptionFailed(segmentId, errorMessage, elapsedMs)
                 updateSegment(segmentId) {
                     it.copy(
+                        transcript = "[ASR失敗] ${errorMessage.take(80)}",
                         isTranscribing = false,
-                        asrError = e.message ?: "Unknown ASR error"
+                        asrError = errorMessage,
+                        transcriptionMs = elapsedMs,
+                        realTimeFactor = null
                     )
                 }
-                if (showErrors) {
-                    _uiState.update { it.copy(lastError = "ASR transcription failed: ${e.message}") }
-                }
+                _uiState.update { it.copy(lastError = "ASR transcription failed: $errorMessage") }
+                return true
             }
+        }
+    }
+
+    private suspend fun recoverAsrEngine(): Boolean {
+        val modelDir = resolveAsrModelDirPath(
+            preferredPath = _uiState.value.asrDebugState.modelDirPath
+        )
+        return try {
+            asrEngine.close()
+            asrEngine.initialize(modelDir)
+            _uiState.update {
+                it.copy(
+                    asrDebugState = it.asrDebugState.copy(
+                        isReady = true,
+                        isLoadingModel = false,
+                        modelDirPath = modelDir,
+                        modelAccessSummary = buildAsrAccessSummary(File(modelDir))
+                    )
+                )
+            }
+            true
+        } catch (recoveryError: Exception) {
+            Log.e("XtrustVM", "ASR recovery failed", recoveryError)
+            _uiState.update {
+                it.copy(
+                    asrDebugState = it.asrDebugState.copy(
+                        isReady = false,
+                        isLoadingModel = false,
+                        modelDirPath = modelDir,
+                        modelAccessSummary = buildAsrAccessSummary(File(modelDir))
+                    ),
+                    lastError = "ASR recovery failed: ${recoveryError.message}"
+                )
+            }
+            false
         }
     }
 
@@ -1104,6 +1359,21 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
                 )
             )
         }
+    }
+
+    private fun removeSegment(segmentId: Long) {
+        _uiState.update { current ->
+            current.copy(
+                vadDebugState = current.vadDebugState.copy(
+                    savedSegments = current.vadDebugState.savedSegments.filter { it.id != segmentId }
+                )
+            )
+        }
+    }
+
+    private fun isNoiseTranscript(text: String): Boolean {
+        val cleaned = text.trim().replace(Regex("[。、．，.!！?？…「」『』・〜～ー\\s]+"), "")
+        return cleaned.isEmpty()
     }
 
     private fun buildSegmentFileName(): String {
@@ -1183,12 +1453,21 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     override fun onCleared() {
-        runBlocking {
-            completeActiveSession()
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            microphoneVadMonitor.stop()
         }
+        activeSessionId = null
+        synchronized(captureLock) {
+            activeSpeechFrames.clear()
+            preRollFrames.clear()
+        }
+        synchronized(wrapupJobLock) {
+            activeWrapupJobs.values.forEach { it.cancel() }
+            activeWrapupJobs.clear()
+        }
+        wrapupScope.cancel()
         super.onCleared()
         asrEngine.close()
-        releaseCurrentLlmEngine()
     }
 
     private companion object {
@@ -1197,6 +1476,7 @@ class XtrustViewModel(application: Application) : AndroidViewModel(application) 
         const val AUTO_TRANSCRIBE_SEGMENTS = true
         const val DEFAULT_CHAT_THREAD_TITLE = "新しいチャット"
         const val MAX_CHAT_HISTORY_MESSAGES = 8
+        const val WRAPUP_TIMEOUT_MS = 10 * 60 * 1000L
         const val CHAT_ROLE_USER = "user"
         const val CHAT_ROLE_ASSISTANT = "assistant"
         val KNOWN_ASR_MODEL_DIR_NAMES = listOf(

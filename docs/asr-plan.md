@@ -44,6 +44,31 @@ Official references:
 - https://k2-fsa.github.io/sherpa/onnx/android/prebuilt-apk.html
 - https://k2-fsa.github.io/sherpa/onnx/android/build-sherpa-onnx.html
 
+## VAD Runtime Policy
+
+The standalone app must keep `VAD` decoupled from `ASR` runtime dependencies.
+
+Rules:
+
+- `ASR` may use `sherpa-onnx`.
+- `VAD` must **not** use `ONNX Runtime` inside this app process.
+- Do **not** reintroduce `Silero VAD`, `SherpaOnnxVadEngine`, or any other
+  `ONNX`-based VAD unless it runs behind a truly separate process boundary.
+
+Reason:
+
+- This app already carries native `ONNX` dependencies for `ASR`.
+- Mixing another `ONNX`-based `VAD` in the same Android app caused real
+  runtime/JNI/native library conflicts during integration.
+- `VAD` is not the place to couple app stability to `ASR` runtime upgrades.
+- A simpler local `VAD` with a clean boundary is preferable to a higher-quality
+  `VAD` that destabilizes the whole app.
+
+Current direction:
+
+- Keep `VAD` as a standalone local module with no `ONNX Runtime` dependency.
+- Tune or replace it only with implementations that preserve this separation.
+
 ## Product Intent
 
 This app should be treated as an edge speech / LLM validation workbench.
@@ -128,7 +153,7 @@ Tasks:
 
 - Add `audio/Recorder.kt`
 - Add `vad/LocalVadEngine.kt`
-- Add `vad/SherpaOnnxVadEngine.kt`
+- Add a non-`ONNX` `vad` implementation for local segmentation
 - Save raw audio and VAD segments locally
 - Display segment start / end timestamps in UI
 
@@ -250,6 +275,7 @@ Design rules:
 
 - Keep engines behind interfaces so models can be swapped.
 - Separate recording, VAD, ASR, and summarization into distinct modules.
+- Do not make `VAD` share `ONNX Runtime` assumptions with `ASR`.
 - Track metrics as first-class data, not logs only.
 - Prefer short local segments as the central unit of processing.
 
